@@ -1,0 +1,12 @@
+[package]
+name = "omnibus-adapter-fs-xdg"
+version.workspace = true
+edition.workspace = true
+description = "fs-xdg adapter: read/write/list inside granted XDG scopes."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
+omnibus-contracts = { path = "../omnibus-contracts" }

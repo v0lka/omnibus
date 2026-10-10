@@ -1,0 +1,12 @@
+[package]
+name = "omnibus-lints"
+version.workspace = true
+edition.workspace = true
+description = "Omnibus R4 connascence and boundary lints (roadmap 1.1.3, quality-gates.md R4). Encodes: CoP, native-type ban in contracts, CoN capability literals, dependency edges."
+
+[lints]
+workspace = true
+
+# The lint tool reads the repository as text and carries no dependencies at all:
+# it must stay instant to build and immune to the rules it enforces.
+[dependencies]

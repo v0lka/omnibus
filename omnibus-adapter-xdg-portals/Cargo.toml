@@ -1,0 +1,12 @@
+[package]
+name = "omnibus-adapter-xdg-portals"
+version.workspace = true
+edition.workspace = true
+description = "xdg-portals adapter: screenshot, clipboard, notifications via desktop portals."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
+omnibus-contracts = { path = "../omnibus-contracts" }

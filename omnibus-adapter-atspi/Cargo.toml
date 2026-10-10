@@ -1,0 +1,12 @@
+[package]
+name = "omnibus-adapter-atspi"
+version.workspace = true
+edition.workspace = true
+description = "AT-SPI2 a11y adapter: desktop tree, element addressing, typed writes, invocation."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
+omnibus-contracts = { path = "../omnibus-contracts" }

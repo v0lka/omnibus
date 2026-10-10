@@ -1,0 +1,2 @@
+[workspace]
+members = ["omnibus-contracts", "omnibus-adapter-a", "omnibus-adapter-b"]

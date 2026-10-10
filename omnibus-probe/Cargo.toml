@@ -1,0 +1,11 @@
+[package]
+name = "omnibus-probe"
+version.workspace = true
+edition.workspace = true
+description = "Platform probe: detection, adapter selection, floors. Selects exactly one active adapter per subsystem."
+
+[lints]
+workspace = true
+
+[dependencies]
+omnibus-contracts = { path = "../omnibus-contracts" }

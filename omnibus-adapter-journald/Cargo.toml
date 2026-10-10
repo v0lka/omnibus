@@ -1,0 +1,12 @@
+[package]
+name = "omnibus-adapter-journald"
+version.workspace = true
+edition.workspace = true
+description = "journald adapter: journal query/tail plus the audit sink (P5)."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
+omnibus-contracts = { path = "../omnibus-contracts" }

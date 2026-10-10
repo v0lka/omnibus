@@ -1,0 +1,20 @@
+[package]
+name = "omnibus-core"
+version.workspace = true
+edition.workspace = true
+description = "Omnibus core: MCP facade, sessions, grant checks, audit pipeline, capability registry. OS-agnostic; links no adapter crates."
+
+[lints]
+workspace = true
+
+[dependencies]
+# The only allowed internal dependency of the core (roadmap 1.1.2: the core does not
+# depend on adapters — they arrive through a probe-assembled registry).
+omnibus-contracts = { path = "../omnibus-contracts" }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "omnibusd"
+path = "src/main.rs"

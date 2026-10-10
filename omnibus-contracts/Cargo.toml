@@ -1,0 +1,13 @@
+[package]
+name = "omnibus-contracts"
+version.workspace = true
+edition.workspace = true
+description = "Omnibus SPI seam: traits, DTOs, capability registry, error taxonomy. The ONLY shared dependency; zero OS dependencies."
+
+[lints]
+workspace = true
+
+# Invariant (specs/architecture/layers-and-crates.md): this crate always has zero OS
+# dependencies and zero dependencies on core. External dependencies are restricted to
+# serde/async types by the omnibus-lints dependency-edge rule (roadmap task 1.1.3).
+[dependencies]
