@@ -1,0 +1,591 @@
+# Omnibus — роадмап: MVP → v1.0 → v2.0
+
+**Версия:** 1.0-draft · **Дата:** 2026-10-09 · **Статус:** план работ, companion к [omnibus-spec.md](omnibus-spec.md) (продуктовый слой), [omnibus-architecture.md](omnibus-architecture.md) v1.0 (SPI, матрица платформ, политика деградации) и [omnibus-pitch.md](omnibus-pitch.md) (задачи агента, метрики, каналы)
+
+Этот документ заменяет раздел «Roadmap» спеки (M0–M3) развёрнутой сеткой работ. Продуктовые решения и имена не меняются — все задачи ссылаются на фиксированные сущности архитектуры: крейты (`omnibus-contracts`, `omnibus-core`/`omnibusd`, `omnibus-probe`, `omnibus-adapter-*`), 12 трейтов SPI (10 подсистем §4), инструменты §5, capabilities §7.1, лестницу деградации §7.3, матрицу платформ §6.
+
+---
+
+## 0. Правила игры
+
+### 0.1. Майлстоун = shippable
+
+Каждый майлстоун заканчивается установленным с штатного пакетного менеджера продуктом, на котором работают killer-демо из питча, — а не «веткой с прогрессом».
+
+| Майлстоун | Результат | Целевые платформы (§6) | Оценка* |
+|---|---|---|---|
+| **MS1 — MVP** | Arch **T1**: полный контракт (read+write, prev_boot из коробки, `pkg.undo`=cache-downgrade); SPI слоя MS1, probe-архитектура, capabilities-гейтинг | Arch | 10–14 нед |
+| **MS2 — v1.0** | + Manjaro **T1** (своя тест-матрица), Debian trixie **T2** / bookworm **T2** (на полу), Ubuntu LTS **T2**, Mint **T2**, Fedora **T2**, Debian bullseye **T3** (сборка есть, гарантий нет) | 8 Linux-платформ | 6–8 нед |
+| **MS3 — v2.0** | + macOS **T2** (≥14): адаптеры ax / unifiedlog / launchd / brew / fs-tcc, TCC-визард, нотаризованная формула | 9 платформ | 8–12 нед |
+
+\* Оценки в неделях — для календарного планирования, не обещания; уточняются после Ф1.1 (закрытие ⚠M0-вопросов §10 архитектуры).
+
+### 0.2. Сквозные правила (для каждой задачи)
+
+- **R1. Контракт раньше кода.** Инструмент появляется в tool list только после того, как объявлены его capability-константы и трейт в `omnibus-contracts`, а контракт test suite умеет проверять реализацию.
+- **R2. Contract test suite — gate.** Каждая реализация трейта принимается в репозиторий только при зелёном поведенческом наборе против неё (§8.8.1 архитектуры). Это механическая гарантия «новый адаптер — без изменений ядра».
+- **R3. Деградация — по лестнице §7.3.** Каждый write-инструмент и каждая платформозависимая фича обязаны определить поведение во всех четырёх состояниях: degraded / hidden (`CapabilityRequired`) / below-floor (`FloorUnsupported`) / opt-in-required.
+- **R4. Негативные проверки в CI.** Запреты границы (адаптер ↮ адаптер, адаптер ↮ `omnibus_core::internal`, литералы имён capabilities, tuple-сигнатуры трейтов) проверяются автоматически — PR с нарушением не собирается (§8.8.2).
+- **R5. Аудит тотален (P5).** Ни один write-путь не считается готовым без structured-события в AuditSink: `{ts, session, actor, tool, adapter, op, params_hash, result, scope_ref}`.
+- **R6. Никогда-список §7.4 (единый источник — §7.4 архитектуры; сверять по всем пунктам):** write вне грантов, выданных человеком вне контура агента; модельные вызовы из omnibusd; consent-брокер с UI и любые in-band подтверждения; смена сетевого бэкенда; бэкпорты systemd; изменение системных политик безопасности (программная выдача TCC). Не планируются ни в одной задаче; появление такой задачи в ревью = отклонение; тест 1.7.1 «по списку» сверяется с §7.4.
+- **R7. Честность продукта.** Формулировки AC не должны обещать больше, чем tier платформы: у apt — «undo нет», на volatile-журнале — prev_boot после opt-in, у недееспособного адаптера — инструмент скрыт.
+
+### 0.3. Формат атомарной задачи
+
+Каждая задача: **What** (что делаем) · **Where** (крейт/файл/путь) · **How** (как, с опорой на архитектуру) · **AC** (Acceptance Criteria — проверяемые критерии, чекбоксы).
+
+---
+
+## 1. MS1 — MVP: Arch Linux T1, полный контракт
+
+**Цель:** на чистом Arch (GNOME/KDE, X11 и Wayland) — полный набор инструментов §5 поверх адаптеров atspi / journald / systemd1 / alpm / xdg-portals / fs-xdg / kb-archwiki; аудит в journald; `doctor` ведёт онбординг. Одновременно закладываются: SPI контрактного слоя MS1 (новые трейты объявляются just-in-time — вместе со своими первыми реализациями), probe-архитектура, capabilities-гейтинг, semver контрактов, негативные CI-проверки. К концу MS1 работают демо №1–3 питча («Диагноз за минуту», «Формы», «После обновления»).
+
+### Ф1.1. Гейт предположений и скелет проекта
+
+Закрывает открытые вопросы §10 (⚠M0) в объёме Arch/Manjaro и создаёт каркас, в котором дальше невозможна деградация дисциплины.
+
+**Задача 1.1.1 — Верификация ⚠M0-допущений (Linux-часть)**
+- **What:** фактическая проверка пяти открытых вопросов §10 в объёме, влияющем на MS1–MS2: дефолт персистентности journald на Debian (trixie/bookworm/bullseye), Fedora, Manjaro; фактический пол AT-SPI2 по матрице DE (GNOME/KDE/XFCE/Cinnamon/MATE); systemd-версия актуального Ubuntu LTS (подтвердить 255).
+- **Where:** результаты — таблица в `docs/verification/m0-findings.md`; правки полов — §6 архитектуры (следующая минорная ревизия).
+- **How:** чистые контейнеры/VM каждого дистрибутива; `ls /var/log/journal`, `systemctl --version`, `gdbus introspect` на AT-SPI2-шине; для AT-SPI2-пола — замер минимальной версии, на которой контрактные операции (tree/element/set_value/invoke) проходят contract test suite на всех пяти DE.
+- **AC:**
+  - [ ] `m0-findings.md` содержит по каждому вопросу факт + источник (версия пакета, вывод команды), а не предположение
+  - [ ] Дефолты персистентности для 6 дистрибутивов (Manjaro, Debian×3, Fedora, Ubuntu LTS) зафиксированы и перенесены в план Ф2.5 (кому doctor предлагает opt-in)
+  - [ ] Пол AT-SPI2 зафиксирован числом и внесён в §6; для каждой DE известно, проходит ли полный контрактный набор
+  - [ ] systemd-версия Ubuntu LTS подтверждена или исправлена в матрице §6
+
+**Задача 1.1.2 — Cargo workspace и карта крейтов**
+- **What:** создать workspace: `omnibus-contracts`, `omnibus-core` (бинарь `omnibusd`), `omnibus-probe`, `omnibus-adapter-atspi`, `omnibus-adapter-journald`, `omnibus-adapter-systemd1`, `omnibus-adapter-alpm`, `omnibus-adapter-xdg-portals`, `omnibus-adapter-fs-xdg`, `omnibus-adapter-kb-archwiki`; направление зависимостей — по §2.
+- **Where:** корень репозитория, `Cargo.toml` workspace; `docs/architecture-decisions.md` — ADR-001 о выборе `dyn Trait` вместо дженериков и динамических плагинов.
+- **How:** feature-флаги крейтов адаптеров (compile-time уровень детекции §7.2); правило зависимостей фиксируется в CI на этой задаче, до первого кода адаптеров.
+- **AC:**
+  - [ ] `cargo build --workspace` собирается; `omnibusd --version` отвечает
+  - [ ] Зависимости: `contracts` не зависит ни от чего кроме serde/async-типов; адаптеры зависят только от `contracts`; core не зависит от адаптеров (адаптеры регистрируются через реестр)
+  - [ ] CI-джоба «dependency rules» падает при попытке добавить запрещённое ребро (проверено тестовым PR)
+
+**Задача 1.1.3 — CI-каркас и connascence-линты**
+- **What:** конвейер fmt/clippy/test + кастомные линты, кодирующие правила коннасценции §8.5: запрет tuple-сигнатур в трейтах (CoP), запрет нативных типов в `omnibus-contracts`, запрет литералов имён capabilities вне единого реестра (CoN), запрет `omnibus_core` в адаптерах (интрузивная связь).
+- **Where:** `.github/workflows/ci.yml` (или аналог), `contracts/tests/lints.rs`, clippy-конфиг.
+- **How:** §8.8.2 — линты как закодированная коннасценция; негативные тесты-фикстуры «код, который обязан не собираться».
+- **AC:**
+  - [ ] Каждое из 4 правил подтверждено негативным тестом (фикстура с нарушением красная, исправленная — зелёная)
+  - [ ] CI гоняет fmt/clippy/test/lints на каждом PR; время прогона < 10 мин на кэшированном раннере
+
+**Задача 1.1.4 — Contract test suite: harness**
+- **What:** поведенческий набор в `omnibus-contracts`: для каждого трейта — обязательный набор сценариев (happy path, ошибки `NativeFailure`, таймауты, пустые ответы), который гоняется против любой реализации; набор растёт just-in-time с объявлением новых трейтов.
+- **Where:** `omnibus-contracts/tests/suite/`; макрос `contract_tests!(impl_under_test)`.
+- **How:** §8.6/§8.8.1 — suite как gate; реализации подключают suite своим тест-биндером; фейковые in-memory реализации для тестов ядра живут рядом (не в адаптерах — P6).
+- **AC:**
+  - [ ] Harness компилируется и гоняется против фейковой реализации каждого трейта
+  - [ ] Документировано: как добавить реализацию и привязать suite (инструкция в README контрактов)
+  - [ ] CI-джоба запускает suite против всех существующих реализаций; провал = запрет merge
+
+### Ф1.2. omnibus-contracts: полная SPI
+
+**Задача 1.2.1 — SPI контрактного слоя MS1: 10 трейтов (8 подсистем)**
+- **What:** объявить подсистемы MS1: `DesktopA11y`, `Journal` + `AuditSink`, `ServiceManager`, `PackageManager`, `ScreenCapture` + `Notify`, `FileScope`, `KnowledgeBase`, `PlatformProbe`. Трейты объявляются **just-in-time** — вместе со своими первыми реализациями: `NetworkStatus` — в Ф2.2.3, `AppIntentsBridge` — в Ф3.6.2 (оба — аддитивное расширение контракта, ядро не меняется); заблаговременные «заделы» не строятся — добавление трейта и так аддитивно.
+- **Where:** `omnibus-contracts/src/spi/*.rs`.
+- **How:** сигнатуры — именованные структуры (никаких tuple-параметров), операции — по колонке «Ключевые операции контракта» §4 (например `PackageManager`: `list`, `info`, `search`, `install`, `remove`, `history`, `undo`).
+- **AC:**
+  - [ ] 10 трейтов (8 подсистем) объявлены — ровно те, у которых в MS1 есть реализация
+  - [ ] Каждый трейт имеет дескриптор capabilities (какие capability объявляет реализатор)
+  - [ ] Правила маппинга ошибок: каждый метод возвращает контрактную ошибку, `NativeFailure{code}` сохраняет payload исходного сообщения
+  - [ ] Версия контракта (semver) проставлена и независима от версии кода
+
+**Задача 1.2.2 — DTO-дисциплина и opaque-токены**
+- **What:** плоские именованные DTO для всех операций; newtype-обёртки (`Milliseconds`, `Bytes`, `Severity`); типы адресации: `element_id`, `session_id` — opaque-токены, mintит только ядро; нативные типы (`zbus::Value`, хэндлы ALPM, `AXUIElementRef`) не покидают адаптер.
+- **Where:** `omnibus-contracts/src/dto/*.rs`, `omnibus-contracts/src/tokens.rs`.
+- **How:** §4 «Дисциплина DTO», §8.5 (CoM→CoT, CoI→opaque-токены).
+- **AC:**
+  - [ ] Ни один DTO не содержит кортежей и native-типов (линт 1.1.3 зелёный)
+  - [ ] Токены нельзя сконструировать вне ядра (приватный конструктор, проверено компиляцией негативного примера)
+  - [ ] Сериализация DTO (serde) — единственное разделяемое поведение; зафиксировано в README контрактов
+
+**Задача 1.2.3 — Реестр capabilities и error taxonomy**
+- **What:** константы всех capabilities §7.1 (`desktop.tree`, `desktop.write.typed`, `journal.persistent`, `journal.prev_boot`, `journal.query`, `service.read`, `service.write`, `pkg.read`, `pkg.write`, `pkg.undo` со значениями `none`/`cache-downgrade`/`transactional`, `portal.clipboard`, `portal.screenshot`, `portal.notify`, `files.scope.read`, `files.scope.write`, `files.scope.tcc`, `kb.present`, `net.read`), формат `{domain}.{feature}[.{qualifier}]` + semver + статус (`present`/`degraded`/`opt-in-required`), для полиформенных capability — значение-enum; ошибки: `CapabilityRequired`, `ScopeDenied`, `FloorUnsupported`, `AdapterUnavailable`, `NativeFailure{code}`, `ElementStale`, `TimeoutError`, `Unsupported{reason}`.
+- **Where:** `omnibus-contracts/src/capabilities.rs`, `omnibus-contracts/src/errors.rs`.
+- **How:** §7.1 — реестр один, литералы в коде запрещены (линт Ф1.1.3); capability не может объявиться вне контракта (CoV).
+- **AC:**
+  - [ ] Все имена capabilities существуют только как константы; grep-линт по репозиторию на литералы зелёный
+  - [ ] `pkg.undo` типизирован enum'ом значений, а не строкой
+  - [ ] Error taxonomy покрывает все методы всех трейтов; в contracts нет `anyhow`/`Box<dyn Error>` на границе
+
+### Ф1.3. omnibus-core: ядро omnibusd
+
+**Задача 1.3.1 — MCP-фасад и реестр инструментов**
+- **What:** транспорт stdio (rmcp, tokio; HTTP — вне v1); топология stdio-child: инстанс на MCP-соединение (§3.1); реестр инструментов как `(имя, JSON-схема, требуемые capabilities, обработчик)`; генерация схем из DTO; каркас инструментов ядра (doctor — оркестрация трейтов поверх SPI).
+- **Where:** `omnibus-core/src/facade/`, `omnibus-core/src/registry.rs`.
+- **How:** §3.1 и §3.6; правило §5 — инструмент живёт в ядре и вызывает трейт, а не реализацию; ни один инструмент не импортирует нативные крейты.
+- **AC:**
+  - [ ] `omnibusd` отвечает на MCP-хендшейк по stdio; фиктивный инструмент проходит round-trip из Claude Code/goose
+  - [ ] JSON-схемы инструментов генерируются из DTO (не написаны руками); расхождение = ошибка компиляции/теста
+  - [ ] Скрытие инструмента без capabilities работает: инструмент отсутствует в `tools/list`, прямой вызов → `CapabilityRequired` с подсказкой doctor
+
+**Задача 1.3.2 — Сессии**
+- **What:** сессия = MCP-соединение (§3.2: живёт и умирает с процессом инстанса, без TTL; идентификатор — для корреляции аудита); mint всех opaque-токенов (session_id, element_id) — только ядром; гранты — единый механизм TOML-манифестов + `omnibus grant` (§3.3); политика лимитов (дефолты §3.10: tool-call 10 с, tree 15 с, D-Bus 2 с) и ретраи: один авторетрай идемпотентных read, write — никогда.
+- **Where:** `omnibus-core/src/sessions/`.
+- **How:** §3.2; жизненный цикл адаптера `probe → register → serve → shutdown` — конечный автомат ядра (CoE, §8.5); адаптер физически не вызывается до register.
+- **AC:**
+  - [ ] Таймаут read после одного авторетрая → typed `TimeoutError`; write не ретраится (тест)
+  - [ ] Параллельные write двух инстансов сериализуются (мьютекс + flock, §3.9): оба завершаются, аудит фиксирует порядок захвата (тест)
+  - [ ] element_id, выданный одним инстансом, не резолвится другим (typed-ошибка, тест на два последовательных инстанса)
+  - [ ] Вызов адаптера вне состояния serve невозможен (типизируется автоматом, негативный тест)
+
+**Задача 1.3.3 — Скоупы**
+- **What:** TOML-манифесты `/etc/omnibus/scopes.d/*.toml`; read-only по умолчанию; гранты — только выданные человеком вне контура агента, единый механизм: записи в манифестах (руками или `omnibus grant <грант>` — команда редактирует манифест); все решения о доступе — в ядре.
+- **Where:** `omnibus-core/src/scopes/`; манифест-шаблоны `packaging/scopes.d/*.toml`.
+- **How:** §3.3; скоуп-модель из спеки: «[+scope]» у `desktop.set_value`, `desktop.invoke`, `svc_start`, `svc_stop`, `pkg_install`, `pkg_remove`, `pkg_undo`, `fs_write`, `clip_write`, `notify`; opt-in-гранты — тот же механизм: записи в тех же манифестах (секция `[optin]`, имя = capability в статусе `opt-in-required`, напр. `journal.persistent` на volatile-дистрибутивах); выдача — та же команда `omnibus grant <имя>`, doctor возвращает готовую команду; ревокация — удалением записи («временный» грант = выданный и отозванный); provenance в аудите тот же (`config|cli|doctor`); инвариант «нет confirm-API» — ни один MCP-метод не принимает токен согласия, у каждого грант-события аудита provenance `config|cli|doctor`.
+- **AC:**
+  - [ ] Write-инструмент без гранта → `ScopeDenied`, событие аудита записано, тест зелёный
+  - [ ] Инвариант no-confirm-API: негативный тест — «подтверждение» от агента (токен/поле согласия в аргументах) игнорируется, действие отклонено как без гранта
+  - [ ] Каждое грант-событие аудита имеет provenance `config|cli|doctor` — тест
+  - [ ] Манифест с синтаксической ошибкой не роняет демон: онбординг-ошибка в `doctor`, остальные скоупы работают
+  - [ ] Дефолтная установка (без пользовательских томов) даёт ровно read-only набор — проверено интеграционным тестом на свежем манифесте
+
+**Задача 1.3.4 — Аудит-пайплайн**
+- **What:** единая схема события `{ts, session, actor, tool, adapter, op, params_hash, result, scope_ref}`; аудит на уровне фасада (адаптеры о нём не знают); приёмник — трейт `AuditSink`; реализации: journald (основная), file-fallback (тесты и нестандартные конфигурации).
+- **Where:** `omnibus-core/src/audit/`; `omnibus-adapter-journald` (AuditSink-часть), file-fallback — `omnibus-core/src/audit/file_sink.rs`.
+- **How:** §3.4, P5; params_hash — хэш параметров (не сами параметры — в журнал не попадают чувствительные данные).
+- **AC:**
+  - [ ] Каждое действие любого инструмента (read тоже) даёт ровно одно событие с полной схемой — интеграционный тест по всем инструментам §5
+  - [ ] Падение AuditSink не роняет инструмент: событие уходит в file-fallback, деградация видна в `capabilities()`/`doctor`
+  - [ ] `params_hash` обратимо не восстанавливает параметры (ревью + тест на отсутствие сырых параметров в событии)
+
+**Задача 1.3.5 — Реестр capabilities() и гейтинг инструментов**
+- **What:** агрегатор отчётов адаптеров в один документ для агента; связка «capability → инструмент» по §5; каждая сессия строит документ из свежего probe-отчёта — изменения конфига/среды подхватываются новой сессией (§7.2).
+- **Where:** `omnibus-core/src/capabilities/`.
+- **How:** §7.1–§7.3: статусы present/degraded/opt-in-required; четыре состояния деградации лестницы; в спорах capabilities() выигрывает (§7.5).
+- **AC:**
+  - [ ] Документ `capabilities()` содержит провайдера, версию и ограничения каждой capability
+  - [ ] Интеграционный тест лестницы: (a) degraded — инструмент в списке, схема помечает ограничение; (b) отсутствующая — скрыт, прямой вызов → `CapabilityRequired` с подсказкой doctor; (c) below-floor — адаптер не активирован, документ объясняет причину («systemd 247 < 252»); (d) грант не выдан — статус opt-in-required, поведение = (b)
+  - [ ] Изменение среды подхватывается новой сессией: инстанс, запущенный после doctor-CLI, видит обновлённый tool list (тест на два последовательных инстанса)
+
+### Ф1.4. omnibus-probe и end-to-end деградация
+
+**Задача 1.4.1 — PlatformProbe для Arch**
+- **What:** `detect() → PlatformReport{distro/release, versions, живость демонов}`: `/etc/os-release`, `systemctl --version`, systemd1 на шине, AT-SPI2 в сессии, wl-clipboard/xclip наличие; выбор и активация адаптеров (по одному активному на подсистему — §9).
+- **Where:** `omnibus-probe/src/`.
+- **How:** §4.8, §7.2 runtime-уровень (перекрывает compile/install-time); отчёт → реестр capabilities (Ф1.3.5).
+- **AC:**
+  - [ ] На чистом Arch (GNOME и KDE, X11 и Wayland — 4 комбинации в CI) probe выдаёт корректный отчёт и активирует полный набор адаптеров
+  - [ ] Отсутствие AT-SPI2 в сессии → `desktop.*` скрыты, документ объясняет причину и ссылается на doctor
+  - [ ] Новый инстанс после изменения среды перевыбирает адаптеры по свежему probe (тест на перезапуск)
+
+**Задача 1.4.2 — Version floor как механизм**
+- **What:** enforcement floor'ов: systemd ≥ 252, AT-SPI2 ≥ пола из Ф1.1.1; ниже пола адаптер не активируется, `capabilities()` объясняет причину.
+- **Where:** `omnibus-probe/src/floors.rs`; константы полов — в `omnibus-contracts`.
+- **How:** §6 «Version floors», лестница §7.3.3. На Arch floor не срабатывает (rolling) — механизм тестируется интеграционно на симулированном окружении (стаб-отчёт systemd 247) и по-настоящему — в MS2 (bookworm/bullseye).
+- **AC:**
+  - [ ] Тест со стабом «systemd 247» → адаптер не активирован, документ содержит точную причину
+  - [ ] Пол AT-SPI2 берётся из константы, подтверждённой Ф1.1.1 (не магическое число в коде probe)
+  - [ ] Документация doctor описывает, что увидит агент ниже пола
+
+### Ф1.5. Адаптеры чтения (Arch)
+
+**Задача 1.5.1 — adapter-atspi: read-путь**
+- **What:** `tree(app)`, `element(id)`, `read_attr` поверх AT-SPI2 over D-Bus; адресация role+name (не пиксели); кодеки a11y-дерева в DTO.
+- **Where:** `omnibus-adapter-atspi/src/`.
+- **How:** крейт `atspi`; обход дерева и разрешение адресов — собственность адаптера (CoA, контракт задаёт только вход/выход); урок prior art — чтение дерева ~300 байт вместо ~1 МБ скриншота.
+- **AC:**
+  - [ ] Contract suite `DesktopA11y` зелёный против реализации на живом GTK- и Electron-приложении (в CI — Xvfb + headless compositor)
+  - [ ] `desktop.tree` на эталонном приложении отдаёт дерево с role+name-адресацией; повторный вызов в бюджете времени (тест)
+
+**Задача 1.5.2 — adapter-journald: Journal**
+- **What:** `query(Filter{unit, boot, severity, window})`, `tail`; `prev_boot` — независимый признак «факт прошлых загрузок» (не выводится из `journal.persistent`: свежая persistent-машина без перезагрузок ещё не имеет prev_boot).
+- **Where:** `omnibus-adapter-journald/src/journal.rs`.
+- **How:** journald JSON-интерфейс; `journal.prev_boot` объявляется при факте прошлых загрузок в журнале; на Arch persistent из коробки, prev_boot входит в T1-контракт (при наличии прошлых загрузок).
+- **AC:**
+  - [ ] Contract suite `Journal` зелёный; фильтры unit/severity/window проверены на синтетическом журнале
+  - [ ] `journal_query` с prev_boot возвращает события предыдущей загрузки на persistent-машине; на volatile-стенде capability отсутствует (тест на двух стендах)
+
+**Задача 1.5.3 — adapter-systemd1: чтение**
+- **What:** `list`, `status` через org.freedesktop.systemd1 (zbus).
+- **Where:** `omnibus-adapter-systemd1/src/`.
+- **How:** read-only методы; юниты в DTO; коды ошибок D-Bus → `NativeFailure{code}` с сохранением payload.
+- **AC:**
+  - [ ] Contract suite `ServiceManager` (read-часть) зелёный; `svc_list`/`svc_status` на 100+ юнитах системы не деградируют по времени (бюджет в тесте)
+  - [ ] Несуществующий юнит → контрактная ошибка, а не паника/необработанный D-Bus-ответ
+
+**Задача 1.5.4 — adapter-alpm: чтение**
+- **What:** `list`, `info`, `search`, `history` через alpm.
+- **Where:** `omnibus-adapter-alpm/src/`.
+- **How:** крейт `alpm`; хэндлы ALPM не покидают адаптер; `history` из pacman-лога — основа будущего `undo`.
+- **AC:**
+  - [ ] Contract suite `PackageManager` (read-часть) зелёный; `pkg_list` на системе с 1000+ пакетов в бюджете времени
+  - [ ] `pkg_info` возвращает метаданные установленного и доступного пакета; `history` читает транзакции pacman-лога
+
+**Задача 1.5.5 — adapter-xdg-portals: clipboard (read+write), screenshot, notify**
+- **What:** `clip_read`; `clip_write` [+scope `clip.write` — write-действие, несмотря на группировку «порталы»]; `screenshot` (portal/X11); `notify` [+scope `notify.send`] (D-Bus notifications).
+- **Where:** `omnibus-adapter-xdg-portals/src/`.
+- **How:** xdg-desktop-portal + wl-clipboard; capability `portal.clipboard`/`portal.screenshot`/`portal.notify` объявляются по факту наличия бэкенда (авто-детект — часть probe-отчёта).
+- **AC:**
+  - [ ] На GNOME и KDE (X11 + Wayland): round-trip clipboard, скриншот, уведомление — интеграционные тесты в виртуальной сессии
+  - [ ] Отсутствие бэкенда (стенд без wl-clipboard) → соответствующие инструменты скрыты, документ объясняет
+
+**Задача 1.5.6 — adapter-fs-xdg и adapter-kb-archwiki: чтение**
+- **What:** `fs_list`/`fs_read` в грантированных XDG-скоупах; `wiki_search`/`wiki_page` по ArchWiki.
+- **Where:** `omnibus-adapter-fs-xdg/src/`, `omnibus-adapter-kb-archwiki/src/`.
+- **How:** дефолтный read-скоуп — $HOME целиком, включая dotfiles (решение 2026-10-10); за пределами $HOME — только по явному скоупу; `fs_write` — только по гранту (запрет путей — 1.6.4); KB-адаптер кэширует статьи (свежесть rolling); применимость статьи оценивает агент (P7).
+- **AC:**
+  - [ ] `fs_read` за пределами гранта → `ScopeDenied` (тест); внутри `~/Documents` — читает, бюджет и лимиты размеров зафиксированы
+  - [ ] `wiki_search` находит статью по запросу «suspend» и отдаёт `wiki_page` с содержимым; офлайн-режим деградирует честно (stale-кэш помечен)
+
+### Ф1.6. Адаптеры записи (Arch)
+
+**Задача 1.6.1 — adapter-atspi: write-путь (typed)**
+- **What:** `set_value`, `invoke` через typed-интерфейсы AT-SPI2; без эмуляции клавиатуры.
+- **Where:** `omnibus-adapter-atspi/src/write.rs`.
+- **How:** P2/P3 — запись только типизированными методами; требует `desktop.write.typed` + write-скоуп; раскладко-независимость по построению (урок `:` → `^` на ru-группе — в тест-матрице).
+- **AC:**
+  - [ ] Contract suite `DesktopA11y` (write-часть) зелёный: set_value на эталонной форме меняет значение, invoke нажимает кнопку — на X11 и Wayland, при активной ru-раскладке включён отдельный тест
+  - [ ] Запись без write-скоупа → `ScopeDenied` + аудит-событие
+  - [ ] HiDPI-стенд: операции адресуются по дереву, координаты нигде не фигурируют (код-ревью + тест)
+
+**Задача 1.6.2 — adapter-systemd1: write**
+- **What:** `start/stop/restart`, `enable/disable` (+`svc_start`/`svc_stop`, write-скоуп, `service.write`).
+- **Where:** `omnibus-adapter-systemd1/src/write.rs`.
+- **How:** polkit-права системы действуют как есть (мы не перехватываем авторизацию); ошибки авторизации → честная контрактная ошибка.
+- **AC:**
+  - [ ] Contract suite (write-часть) зелёный: рестарт тестового юнита доходит до активного состояния (таймаут-политика ядра)
+  - [ ] Отказ polkit → `NativeFailure` с человекочитаемой подсказкой; аудит-событие с результатом отказа записано
+
+**Задача 1.6.3 — adapter-alpm: write + undo**
+- **What:** `install`, `remove` (+`pkg_install`/`pkg_remove`, write-скоуп); `undo` = downgrade из кэша → `pkg.undo=cache-downgrade`; MCP-инструмент `pkg_undo` [+scope] регистрируется в ядре (скрыт при `pkg.undo=none`).
+- **Where:** `omnibus-adapter-alpm/src/write.rs`.
+- **How:** undo восстанавливает предыдущую версию из pacman-кэша по `history`; если версии нет в кэше — честная деградация (подсказка: ALA/AUR Archive в документации KB, не в коде адаптера — P7).
+- **AC:**
+  - [ ] Contract suite (write-часть) зелёный: install/remove идемпотентны к повтору, ошибки транзакций → `NativeFailure`
+  - [ ] Сценарий «обновил → сломалось → undo»: downgrade из кэша возвращает предыдущую версию (интеграционный тест с фейковым пакетом)
+  - [ ] Нет версии в кэше → `NativeFailure` с объяснением; capabilities не обещают того, чего нет
+
+**Задача 1.6.4 — fs-xdg: write + сквозной аудит (AuditSink)**
+- **What:** `fs_write` в грантированных скоупах; проверка, что write-события всех адаптеров проходят через единый аудит-пайплайн ядра.
+- **Where:** `omnibus-adapter-fs-xdg/src/write.rs`; сквозной тест в `omnibus-core/tests/audit_e2e.rs`.
+- **How:** P5/P6 — адаптер не знает об аудите; ядро оборачивает каждый вызов.
+- **AC:**
+  - [ ] Сквозной тест: write через atspi/systemd1/alpm/fs-xdg → по одному событию в AuditSink с корректными tool/adapter/op
+  - [ ] `fs_write` за пределами гранта → `ScopeDenied`; внутри — пишет, лимиты и запрет путей (dotfiles, /etc) зафиксированы в скоуп-модели и тестах
+
+### Ф1.7. doctor
+
+**Задача 1.7.1 — doctor**
+- **What:** probe + журнал + сервисы + KB; диагноз предпосылок самого Omnibus; ведёт через opt-in: a11y-флаги Electron-приложений, (на Arch — как путь на будущее) включение персистентности journald; изменения подхватываются новой сессией (§7.2). Разделение каналов: вызов через MCP от агента — только диагноз + copy-paste-ремедиация (как у `ScopeDenied`); мутации системы — только в CLI-режиме `omnibus doctor`, исполняемом человеком.
+- **Where:** `omnibus-core/src/tools/doctor.rs` (оркестрация трейтов — обязанность ядра, P6).
+- **How:** §7.4 — opt-in только с явным согласием, собираемым вне контура агента (мутацию исполняет человек — CLI или выданная им команда); никогда-список соблюдён; TTFM-путь: `pacman -S omnibus` → `doctor` → одна строка в конфиг MCP-клиента.
+- **AC:**
+  - [ ] На свежей Arch-VM с GNOME/KDE: doctor находит отсутствующие предпосылки, ведёт через включение, повторный запуск — зелёный; TTFM < 5 минут (замер в тесте онбординга)
+  - [ ] Каждое doctor-изменение системы — отдельное аудит-событие; согласие собирается вне контура агента (CLI, исполняет человек) — granular opt-in, не «починить всё»
+  - [ ] Doctor через MCP не мутирует систему ни при каком ответе агента: результат — диагноз + готовая команда для человека (тест с «согласившимся» агентом)
+  - [ ] Doctor не предлагает ничего из никогда-списка §7.4 (тест по списку)
+
+### Ф1.8. Упаковка, QA-гейты и релиз MVP
+
+**Задача 1.8.1 — PKGBUILD и AUR**
+- **What:** PKGBUILD (linux-набор адаптеров — install-time детекция §7.2) + публикация в AUR.
+- **Where:** `packaging/PKGBUILD`; AUR-репозиторий.
+- **How:** один статический бинарник; манифесты скоупов ставятся в `/etc/omnibus/scopes.d/`.
+- **AC:**
+  - [ ] `pacman -S omnibus` (из AUR) на чистой Arch-VM → рабочий демон, TTFM < 5 мин
+  - [ ] Обновление версии проходит без ручных шагов (тест обновления с предыдущей версии)
+
+**Задача 1.8.2 — CI: виртуальные сессии и полный гейт T1**
+- **What:** матрица CI: GNOME/KDE × X11/Wayland на Arch-контейнерах; Xvfb + headless compositor; contract suite против всех реализаций; негативные проверки зависимостей; smoke демо №1–3.
+- **Where:** `.github/workflows/`; `ci/smoke/`.
+- **How:** T1 = полный CI на каждый релиз ядра и адаптеров (§6); headless GUI-тесты — одновременно фича для разработчиков (питч, кластер E).
+- **AC:**
+  - [ ] Демо №1 («Диагноз за минуту»: journal_query(prev_boot, unit) → диагноз → план фикса из статьи KB → svc_start по гранту из doctor → верификация: svc_status active + чистый tail журнала) проходит как автотест
+  - [ ] Демо №2 («Формы»: fs_read → desktop.tree → set_value → invoke) проходит как автотест
+  - [ ] Демо №3 («После обновления»: `pkg_undo` — downgrade из кэша) проходит как автотест
+  - [ ] Полный прогон матрицы зелёный; красный main невозможен по правилам репозитория
+
+**Задача 1.8.3 — Релиз MVP**
+- **What:** tagged-релиз, заметки с честной матрицей (Arch T1 — единственная гарантированная платформа), публикация: Show HN + r/archlinux (разбор архитектуры), доклад-заявка на a11y-трек GNOME/KDE.
+- **Where:** GitHub Releases; каналы по питчу (AUR → Show HN → пресса).
+- **How:** метрики: TTFM замеряется автотестом онбординга (Ф1.8.2), north star — успешные агентные задачи в неделю (опрос/ручной трекинг без телеметрии).
+- **AC:**
+  - [ ] Релизные заметки содержат:capabilities-документ эталонной машины, известные ограничения, never-список
+  - [ ] Никакой обязательной телеметрии (ревью кода: отсутствие сетевых отправок без явного opt-in)
+  - [ ] DoD MS1: демо 1–3 зелёные в CI, TTFM < 5 мин, полный contract suite, негативные проверки активны
+
+---
+
+## 2. MS2 — v1.0: все целевые дистрибутивы Linux
+
+**Цель:** матрица §6 по Linux закрыта: Manjaro T1 (своя тест-матрица), Debian trixie T2 / bookworm T2 (systemd 252 на полу), Ubuntu LTS T2, Mint T2, Fedora T2, Debian bullseye T3 (ниже пола systemd 247 — сборка есть, гарантий нет). Демонстрация ключевого свойства архитектуры: **ядро не меняется** — добавляются только адаптеры apt/dnf, kb-guides, ветки probe. К концу MS2 работает демо №4 («С нуля»: пустая VM → машина под задачу по базе знаний платформы).
+
+### Ф2.1. Probe-обобщение: семейства и полы
+
+**Задача 2.1.1 — Дистро-детекция и выбор семейства адаптеров**
+- **What:** расширение `PlatformReport`: Manjaro (arch-семейство, но отдельная ветка), Debian/Ubuntu/Mint (apt-семейство), Fedora (dnf); выбор пакетного адаптера по семейству при старте инстанса.
+- **Where:** `omnibus-probe/src/detect.rs`.
+- **How:** `/etc/os-release` + факт наличия пакетных бэкендов; одно активное семейство на подсистему (§9); при нескольких бэкендах приоритет нативного семейства — задокументированное правило; Manjaro ≠ Arch: задержанные репы, mhwd, pamac — в отчёте probe.
+- **AC:**
+  - [ ] На 6 целевых дистрибутивах (VM-матрица CI) probe выбирает корректный набор адаптеров
+  - [ ] Документ probe-отчёта публикуется в capabilities (агент видит distro/release/versions)
+
+**Задача 2.1.2 — Полы на реальных дистрибутивах**
+- **What:** enforcement systemd ≥ 252: bookworm (252 — на полу) активен; bullseye (247) — адаптер не активируется; подтверждение флага `journal.persistent` по фактам Ф1.1.1 (Ubuntu/Mint — volatile по умолчанию).
+- **Where:** `omnibus-probe/src/floors.rs`; тесты на VM-матрице.
+- **How:** лестница §7.3.3; в спорах capabilities() — машинная правда.
+- **AC:**
+  - [ ] bullseye-VM: инструменты семейства pkg скрыты, `capabilities()` объясняет «systemd 247 < 252», демон работает (чтение journal/desktop, если полы пройдены)
+  - [ ] bookworm-VM: полный T2-набор активен; автотест фиксирует «на полу» статус (любой даунгрейд systemd в релизе — тест падает и сигналит пересмотр)
+  - [ ] Ubuntu/Mint-VM: `journal.persistent=false` в документе capabilities; prev_boot скрыт
+
+### Ф2.2. adapter-apt (Debian trixie / bookworm, Ubuntu LTS, Mint)
+
+**Задача 2.2.1 — PackageManager на apt: чтение**
+- **What:** `list`, `info`, `search`, `history` через apt (libapt или CLI-маппинг — решение ADR-002).
+- **Where:** `omnibus-adapter-apt/src/`.
+- **How:** history из `/var/log/apt/history.log`; контракт тот же, что у alpm — suite без изменений (R2).
+- **AC:**
+  - [ ] Contract suite `PackageManager` зелёный на trixie и bookworm; на Ubuntu LTS и Mint — те же тесты в VM-матрице
+  - [ ] `pkg_list`/`pkg_info` по бюджету времени на системе с ~2000 пакетов
+
+**Задача 2.2.2 — apt: write и честное «undo нет»**
+- **What:** `install`, `remove`; `undo` не реализуется → `pkg.undo=none`; схема `pkg_install` помечает отсутствие отката (degraded-состояние §7.3.1).
+- **Where:** `omnibus-adapter-apt/src/write.rs`; схема инструмента в ядре (читает capability).
+- **How:** лестница §7.3.1 — инструмент присутствует, ограничение видно агенту; демо №3 на apt показывает деградацию «журнал + план ручного фикса» (питч).
+- **AC:**
+  - [ ] JSON-схема pkg_install/pkg_remove на apt-машине содержит явное «undo недоступен (apt не имеет транзакционного отката)»
+  - [ ] Попытка undo → `CapabilityRequired` с подсказкой (а не ошибка выполнения посреди транзакции)
+  - [ ] Транзакции apt не требуют интерактивного ввода (CLI-флаги зафиксированы в тесте на non-tty)
+
+**Задача 2.2.3 — NM read-only «когда есть»**
+- **What:** read-only сетевые данные через NetworkManager D-Bus при наличии: инструмент `net_status`, capability `net.read` (устройства, connectivity, wifi-сети); за netplan/networkd (Ubuntu Server) — capability отсутствует, инструмент скрыт; write-действия на сеть — никогда (§7.4).
+- **Where:** отдельный `omnibus-adapter-nm` (ADR-003 закрыт: NM — отдельный D-Bus-сервис и подсистема §4.10; трейт `NetworkStatus` объявляется здесь, в `omnibus-contracts`, вместе с первой реализацией — just-in-time).
+- **How:** §6 «NM read-only»; contract suite `NetworkStatus` (Ф1.1.4) зелёный против реализации; отсутствие NM не влияет на остальные подсистемы.
+- **AC:**
+  - [ ] На desktop-стендах с NM сетевой статус виден; на networkd-стенде инструменты сети скрыты без ошибок в журнале
+  - [ ] В коде адаптера отсутствуют write-методы NM (ревью + контракт не объявляет их)
+  - [ ] `net_status` в tool list только при живом NM; прямой вызов на стенде без NM → `CapabilityRequired`
+
+### Ф2.3. adapter-dnf (Fedora, T2)
+
+**Задача 2.3.1 — PackageManager на dnf + transactional undo**
+- **What:** `list`, `info`, `search`, `install`, `remove`, `history`, `undo` через dnf history undo/rollback → `pkg.undo=transactional`.
+- **Where:** `omnibus-adapter-dnf/src/`.
+- **How:** dnf/dnf5 — замена провайдера без изменения контракта (обратный сценарий §8.6): сигнатуры и capabilities не меняются.
+- **AC:**
+  - [ ] Contract suite зелёный на Fedora; undo возвращает систему к предыдущей transaction-точке (интеграционный тест)
+  - [ ] `pkg.undo=transactional` отражён в capabilities; демо №3 проходит на Fedora в CI
+  - [ ] Свежие portal-интерфейсы Fedora: screenshot/clipboard работают (smoke на актуальном release)
+
+### Ф2.4. Manjaro T1 (своя тест-матрица)
+
+**Задача 2.4.1 — Manjaro-ветка: контракт T1 + своя тестовая матрица**
+- **What:** alpm/journald/systemd1/atspi работают как на Arch; различия: задержанные репы, mhwd-драйверы, pamac; journald-persistent по факту Ф1.1.1 (⚠M0); отдельная CI-матрица.
+- **Where:** `omnibus-probe` (ветка Manjaro), `packaging/` (PKGBUILD-вариант или собственный пакет), CI.
+- **How:** Manjaro = T1; дистро-специфика (mhwd, pamac, задержанные репы) — примечания матрицы §6 и отчёт probe; kb — ArchWiki + Manjaro-overlay (Ф2.5).
+- **AC:**
+  - [ ] Полный T1-набор автотестов зелёный на Manjaro-VM (GNOME/KDE × X11/Wayland)
+  - [ ] mhwd-специфика (видеодрайверы) не ломает desktop-подсистему (smoke на VM с non-free драйвером)
+  - [ ] Задержка реп обнаружена probe'ом и отражена в отчёте (не в тишине)
+
+### Ф2.5. doctor multi-distro и kb-guides
+
+**Задача 2.5.1 — doctor: opt-in персистентности journald**
+- **What:** на Ubuntu/Mint (volatile по умолчанию) и Debian/Fedora (по фактам Ф1.1.1) doctor предлагает включить persistent (`mkdir /var/log/journal` + restart journald) с явным согласием вне контура агента (мутацию исполняет человек — CLI-режим doctor или выданная им команда); следующий инстанс после doctor-CLI видит `journal.persistent=true`; `journal.prev_boot` появляется после следующей перезагрузки (факт прошлых загрузок — независимый признак).
+- **Where:** `omnibus-core/src/tools/doctor.rs`; `omnibus-probe` (перечитывание при старте инстанса).
+- **How:** §7.4 opt-in-список; флагманский сценарий «ноутбук не проснулся» становится доступен на T2 после opt-in — задокументировать как пример деградационной лестницы §7.3.4 → §7.3.1.
+- **AC:**
+  - [ ] Ubuntu-VM: до opt-in `journal.persistent=false`, prev_boot скрыт; инстанс, запущенный после doctor-CLI, видит persistent=true; после перезагрузки (вторая загрузка стенда в автотесте) prev_boot=true и журнал прошлой загрузки читается
+  - [ ] Согласие отдельное, гранулярное (не пакетом с другими opt-in), собирается вне контура агента; каждое изменение — аудит-событие
+  - [ ] Отказ от opt-in оставляет систему в read-only-статус-кво без повторных навязчивых предложений (политика частоты — тест)
+
+**Задача 2.5.2 — adapter-kb-guides: дистро-доки**
+- **What:** `KnowledgeBase` на дистро-доках (Debian wiki, Ubuntu docs, Mint docs/forums, Fedora docs); ArchWiki+Manjaro-overlay — через существующий kb-archwiki. Плейбук-машинерии нет: применимость статьи оценивает агент (у него есть `capabilities()` и контекст задачи — P7).
+- **Where:** `omnibus-adapter-kb-guides/src/`.
+- **How:** P7 — диагноз универсален, лечение дистро-осознанно; тот же контракт `KnowledgeBase`, что у kb-archwiki (suite без изменений, R2); кэш статей как в Ф1.5.6.
+- **AC:**
+  - [ ] `wiki_search` на Ubuntu находит fix по known-issue через дистро-доки; `wiki_page` отдаёт статью; офлайн-режим деградирует честно (stale-кэш помечен)
+  - [ ] Тот же диагноз (suspend-провал) на Arch и Ubuntu ведёт к разным статьям — интеграционный тест пары машин
+
+### Ф2.6. Каналы, QA-матрица, релиз v1.0
+
+**Задача 2.6.1 — Упаковка: PPA, Debian repo, COPR**
+- **What:** каналы дистрибуции: PPA (Ubuntu LTS, Mint), репозиторий Debian (trixie/bookworm), COPR (Fedora); подпись всех репозиториев.
+- **Where:** `packaging/{debian,fedora,ppa}/`; инфраструктура репо.
+- **How:** по спеке — дистро-репозитории после стабилизации T2-гарантий; AUR остаётся каналом community-провайдеров; NixOS и прочие — T3-путь (сборка есть, capabilities() честен, гарантий нет).
+- **AC:**
+  - [ ] Установка штатным менеджером на каждой T2-платформе → демон работает, TTFM < 5 мин (автотест онбординга на VM)
+  - [ ] Подпись репозиториев проверена свежей машиной (без доверия к ключу установка честно предупреждает)
+  - [ ] Обновление с MVP-версии на v1.0 без ручных шагов (Debian-машина с Arch-прошлого релиза не тестируется — миграция между семействами не обещается)
+
+**Задача 2.6.2 — QA-матрица T2 и гейты tier**
+- **What:** CI-контейнеры/VM по эталонным версиям T2 (smoke) + полный contract suite на каждой семье; гейт «tier ≠ capabilities» — расхождения фиксируются в отчёте релиза (§7.5).
+- **Where:** CI; `docs/release-checklist.md`.
+- **How:** T2 = полное чтение + безопасная запись, smoke на эталонных версиях (§6); Manjaro — полный набор T1 со своей матрицей; T3 bullseye — только сборка.
+- **AC:**
+  - [ ] Матрица 8 Linux-платформ зелёная (по своему уровню: T1 полный, T2 smoke, T3 build)
+  - [ ] Отчёт релиза содержит таблицу расхождений tier↔capabilities, если они есть
+  - [ ] Демо №4 («С нуля»: пустая VM → машина под задачу по KB платформы) проходит на Arch и Ubuntu в CI
+
+**Задача 2.6.3 — Релиз v1.0**
+- **What:** tagged-релиз + обновление позиционирования (сегменты Ubuntu/Mint/Fedora/Debian из питча), Show HN-фоллоу-ап, статья Phoronix/Hackaday.
+- **Where:** GitHub Releases; каналы питча.
+- **AC:**
+  - [ ] Заметки релиза: матрица 8 платформ, честные границы (apt без undo, prev_boot после opt-in, сеть read-only)
+  - [ ] Метрики: TTFM по каждой платформе, north star в динамике с MVP
+  - [ ] DoD MS2: демо 1–4 зелёные на эталонных платформах; наблюдение релиза (не гейт): в diff-логе `omnibus-core` с MVP только аддитивные расширения — регистрация `net_status` поверх трейта Ф2.2.3 и новые capability-константы
+
+---
+
+## 3. MS3 — v2.0: macOS T2
+
+**Цель:** тот же контракт на macOS ≥ 14 (рекомендуемый 15+): адаптеры ax / unifiedlog / launchd / brew(+mas) / screencapture / fs-tcc / kb-guides; TCC-визард в doctor; Homebrew formula с подписью и нотаризацией; AppIntentsBridge как опциональный бэкенд. Проверка главной архитектурной ставки: **ни одного изменения существующих контрактов и инструментов — только аддитивные расширения**: capability-константы (`files.scope.tcc`, `intents.*`) и новые инструменты §5 (`intent_list`/`intent_run`) поверх трейта `AppIntentsBridge`, объявленного в Ф3.6.2 вместе с реализацией, — минорная версия контракта.
+
+### Ф3.1. macOS-гейт предположений
+
+**Задача 3.1.1 — Верификация ⚠M0-допущений (macOS-часть)**
+- **What:** качество Rust-байндингов к AX (objc2) — прототип tree/element/set_value/invoke на 3 приложениях (нативное, Electron, браузер); поведение TCC в headless/SSH-сессиях; таргетинг: macOS 14 vs 15 (ServiceManagement 13+, ежемесячный re-grant Screen Recording в 15+); фактическое значение `pkg.undo` для brew (ожидание: none — brew не даёт транзакционного отката; подтвердить и задокументировать).
+- **Where:** `research/macos-m0/` (прототип), результаты — `docs/verification/macos-findings.md`.
+- **How:** минимальный Xcode-free прототип на objc2; тесты на физической машине и на CI-раннере; вывод по таргетингу — в §6 архитектуры (следующая ревизия).
+- **AC:**
+  - [ ] Прототип читает дерево и делает typed write на 3 типах приложений; известные проблемы байндингов задокументированы с оценкой трудоёмкости
+  - [ ] Headless/SSH-поведение TCC зафиксировано (что работает без GUI-грантов, что нет) — влияет на CI-стратегию Ф3.7
+  - [ ] Таргетинг выбран и обоснован (min version + recommended); pkg.undo(brew) зафиксирован в константе capabilities
+  - [ ] Если прототип выявил блокер контракта (например, невозможность typed write) — эскалация в архитектуру до старта Ф3.2
+
+### Ф3.2. adapter-ax (desktop)
+
+**Задача 3.2.1 — DesktopA11y на AXUIElement: полный путь**
+- **What:** `tree(app)`, `element(id)`, `read_attr`, `set_value`, `invoke` через NSAccessibility/AXUIElement; system-wide и per-pid таргетинг.
+- **Where:** `omnibus-adapter-ax/src/`.
+- **How:** AX API зрелее AT-SPI2 — контракт тот же, suite без изменений (R2); trust-checks и транзакционность действий — по известным практикам AX-автоматизации; Electron-приложения — a11y-флаг (doctor, Ф3.6).
+- **AC:**
+  - [ ] Contract suite `DesktopA11y` зелёный на macOS-раннере: Finder, TextEdit (нативные), Electron-приложение, браузер
+  - [ ] Демо №2 («Формы») проходит на macOS: fs-tcc → ax set_value/invoke
+  - [ ] Отзыв гранта Accessibility в TCC → адаптер деградирует по лестнице (opt-in-required), doctor-визард ведёт обратно
+
+### Ф3.3. adapter-unifiedlog (журнал + аудит)
+
+**Задача 3.3.1 — Journal на unified log + AuditSink**
+- **What:** `query(Filter{...})`, `tail` через `log show --predicate` (или private API-альтернативу — ADR-004); AuditSink → unified log (subsystem/category omnibus).
+- **Where:** `omnibus-adapter-unifiedlog/src/`.
+- **How:** схема события аудита принадлежит ядру — приёмник сменный (P5); `journal.persistent` на macOS всегда true (unified log персистентен в рамках retention) — проверить retention-ограничения в Ф3.1 и задокументировать.
+- **AC:**
+  - [ ] Contract suite `Journal` зелёный; фильтры severity/window маппятся на predicate-синтаксис; unit → typed `Unsupported` с подсказкой (severity/window/process) (тесты на синтетических событиях)
+  - [ ] Аудит-событие Omnibus читается обратно из unified log тем же адаптером (круговорот: write → query)
+  - [ ] Бюджет производительности `log show` на большом журнале зафиксирован в тесте (page/лимиты)
+
+### Ф3.4. adapter-launchd и adapter-brew(+mas)
+
+**Задача 3.4.1 — ServiceManager на launchd**
+- **What:** `list`, `status`, `start/stop/restart`, `enable/disable` через launchctl; LaunchAgent-контекст (только агенты видят GUI); ServiceManagement 13+ для регистрации.
+- **Where:** `omnibus-adapter-launchd/src/`.
+- **How:** domain-различие GUI/системных сервисов — в DTO (`Scope::User`/`System`); не поднимаем системные daemon'ы из сессии (политика ядра).
+- **AC:**
+  - [ ] Contract suite `ServiceManager` зелёный: рестарт пользовательского LaunchAgent доходит до активного состояния
+  - [ ] Системный дом без root → честная контрактная ошибка, а не тихий отказ
+  - [ ] GUI-видимость: сервис, запущенный как агент, отображается в сессии (smoke с тестовым LaunchAgent)
+
+**Задача 3.4.2 — PackageManager на brew(+mas)**
+- **What:** `list`, `info`, `search`, `install`, `remove`, `history` через brew; mas — опциональный бэкенд App Store; `pkg.undo` по факту Ф3.1 (ожидаемо none — честная деградация по §7.3.1).
+- **Where:** `omnibus-adapter-brew/src/`.
+- **How:** cask+formula в одном контракте (тип пакета — поле DTO); mas за capability-флагом (установлен/не установлен).
+- **AC:**
+  - [ ] Contract suite зелёный (formula и cask); демо «С нуля» на macOS ставит инструментарий через brew по статьям KB
+  - [ ] Схема pkg_install помечает «undo недоступен», если `pkg.undo=none` подтверждён
+  - [ ] mas отсутствует → App Store-пакеты скрыты из search, остальные работают
+
+### Ф3.5. Порталы, файлы: screencapture / fs-tcc
+
+**Задача 3.5.1 — ScreenCapture + Notify + clipboard**
+- **What:** `screenshot` через ScreenCaptureKit (с учётом ежемесячного re-grant права в 15+); `notify` через UNUserNotificationCenter; `clip_read`/`clip_write` через NSPasteboard.
+- **Where:** `omnibus-adapter-screencapture/src/`.
+- **How:** capability `portal.screenshot` = opt-in-required до гранта Screen Recording; re-grant-напоминания — doctor (Ф3.6).
+- **AC:**
+  - [ ] Round-trip: скриншот, уведомление, clipboard — на macOS 14 и 15 (CI-раннер + физическая машина)
+  - [ ] Истёкший/отозванный грант → деградация по лестнице, doctor объясняет про ежемесячный re-grant
+  - [ ] Без гранта screenshot скрыт; clipboard/notify не требуют Screen Recording и работают
+
+**Задача 3.5.2 — FileScope: fs-tcc**
+- **What:** `fs_list`/`fs_read`/`fs_write` в TCC-грантированных папках (`~/Documents` и др.); за пределами — Full Disk Access; capability `files.scope.tcc`.
+- **Where:** `omnibus-adapter-fs-tcc/src/`.
+- **How:** скоупы macOS — это официальные права ОС (питч: «права, а не конвенция»); отсутствие гранта → opt-in-required, doctor-визард.
+- **AC:**
+  - [ ] В грантированной папке — полный read/write; вне (например, `~/Library`) без FDA → честный отказ с подсказкой doctor
+  - [ ] Скоуп-модель ядра ограничивает поверх TCC (пользовательский TOML-грант уже; TCC — необходимо, но не достаточно — тест: TCC есть, скоупа нет → `ScopeDenied`)
+
+### Ф3.6. Знания и опциональный бэкенд: kb-guides + AppIntentsBridge
+
+**Задача 3.6.1 — KnowledgeBase на kb-guides**
+- **What:** агрегатор гайдов (Apple Support, SS64, сообщество) через контракт `KnowledgeBase`; без плейбуков — применимость гайда оценивает агент (P7).
+- **Where:** `omnibus-adapter-kb-guides/src/`.
+- **How:** честная оговорка спеки — канонического ArchWiki-эквивалента нет, качество macOS-контента — слабейшее звено macOS-контракта (риск §6 спеки); кэш статей как в Ф1.5.6.
+- **AC:**
+  - [ ] `wiki_search` находит известное fix-руководство; демо №4 проходит на чистой macOS-VM по статьям KB
+  - [ ] Оговорка качества (нет канонической вики, модерация сообщества) задокументирована; `capabilities()` отражает провайдера
+
+**Задача 3.6.2 — AppIntentsBridge (опциональный бэкенд)**
+- **What:** инструменты ядра `intent_list` / `intent_run` [+scope] поверх операций трейта `list_actions`, `run` — через Shortcuts/App Intents, только cooperating-приложения; бэкенд, не замена a11y-слоя.
+- **Where:** `omnibus-adapter-appintents/src/`.
+- **How:** трейт `AppIntentsBridge` объявляется здесь же, в `omnibus-contracts`, вместе с первой реализацией (just-in-time, аддитивно) — ядро не меняется; инструменты поверх bridge появляются в tool list только при наличии actions (probe-отчёт).
+- **AC:**
+  - [ ] На машине с готовыми Shortcut'ами: list_actions видит их, run выполняет тестовый Shortcut; аудит-событие записано
+  - [ ] На чистой машине bridge отсутствует в tool list без ошибок
+  - [ ] Дифференциация в документации: когда агенту использовать ax, когда app-intents (док в `docs/`)
+
+### Ф3.7. doctor-macOS, дистрибуция, CI, релиз v2.0
+
+**Задача 3.7.1 — doctor: TCC-визард**
+- **What:** ведёт через выдачу 4 грантов (Accessibility, Screen Recording, Automation, Full Disk Access); ежемесячный re-grant Screen Recording (15+) — напоминания по состоянию гранта; headless/SSH-ограничения из Ф3.1 задокументированы.
+- **Where:** `omnibus-core/src/tools/doctor.rs` (оркестрация — ядро), macOS-специфика в адаптерах.
+- **How:** §7.4 — TCC выдаёт только человек через GUI или MDM/PPPC; doctor не «выдаёт», а ведёт (открывает нужную панель, проверяет состояние; изменения видны в новой сессии).
+- **AC:**
+  - [ ] Свежая macOS-VM: TTFM < 5 мин от `brew install omnibus` до первой задачи (визард уложился)
+  - [ ] Отзыв любого гранта между сессиями → при старте сессии doctor показывает точный список, что просрочено
+  - [ ] Doctor не пытается программно выдать TCC (ревью по никогда-списку; тест: без GUI-взаимодействия грант не «появляется»)
+
+**Задача 3.7.2 — Дистрибуция: Homebrew formula + подпись + нотаризация + LaunchAgent**
+- **What:** formula в Homebrew; Developer ID-подпись и нотаризация бинарника; mas-интеграция опционально; без регистрации LaunchAgent — демон стартует как child MCP-клиента (stdio-топология §3.1).
+- **Where:** `packaging/homebrew/`; CI-джобы подписи/нотаризации.
+- **How:** install-time детекция §7.2 — macos-набор адаптеров; без подписи Gatekeeper честно предупреждает (задокументировать как T3-путь сборки из исходников).
+- **AC:**
+  - [ ] `brew install omnibus` на чистой macOS → нотаризованный бинарник; демон стартует как child MCP-клиента в сессии пользователя
+  - [ ] Нотаризация в CI воспроизводима (secrets не в репо; джоба описана)
+  - [ ] Обновление формулы с v2.0-rc на v2.0 — без ручных шагов
+
+**Задача 3.7.3 — CI macOS + релиз v2.0**
+- **What:** macOS-раннеры: contract suite против всех macOS-реализаций, TCC-сценарии (по ограничениям Ф3.1), smoke демо 1–4; релиз с матрицей 9 платформ.
+- **Where:** CI; GitHub Releases.
+- **How:** если headless-TCC ограничивает CI — полный TCC-набор гоняется на ферме физических машин (документированный процесс), раннеры — subset; позиционирование macOS-сегмента питча.
+- **AC:**
+  - [ ] Демо №1–4 зелёные на macOS-эталоне (демо №3 — в честной деградации «undo нет», если pkg.undo(brew)=none подтверждён)
+  - [ ] `omnibus-core`: наблюдение релиза — в diff-логе с MVP только аддитивные расширения (capability-константы, регистрация `intent_list`/`intent_run` поверх трейта Ф3.6.2); контракты — минорная версия максимум
+  - [ ] Заметки релиза: 9 платформ, tier-таблица, TCC-инструкция; DoD MS3 выполнен полностью
+
+---
+
+## 4. Трассировка и риски
+
+### 4.1. Соответствие roadmap'у спеки (M0–M3)
+
+| Спека | Этот роадмап |
+|---|---|
+| M0 (contracts+probe, каркас, atspi/journald/alpm read, скоупы, PKGBUILD, Xvfb-smoke) | Ф1.1–Ф1.5, Ф1.8.1 |
+| M1 (write-пути X11/Wayland, systemd1 write, аудит, doctor, CI+contract suite на Arch) | Ф1.6–Ф1.8 |
+| M2 (apt+dnf → T2, kb-guides, AUR-канал провайдеров) | Ф2.2–Ф2.6 |
+| M3 (macOS T2: ax/unifiedlog/launchd/brew/fs-tcc, TCC-визард, Homebrew+нотаризация) | MS3 целиком |
+
+### 4.2. Ключевые риски по майлстоунам (из §6 спеки)
+
+| Майлстоун | Риск | Где закрывается |
+|---|---|---|
+| MS1 | Electron без a11y-флага | Ф1.7.1: doctor ведёт per-app enable |
+| MS2 | Фрагментация дефолтов (volatile journald, NM не универсален) | Ф2.1.2, Ф2.2.3, Ф2.5.1: полы + opt-in + честные схемы |
+| MS2 | QA-матрица 6 дистрибутивов × DE × X11/Wayland | Ф2.6.2: tier-модель (T2 = smoke на эталонах) |
+| MS3 | TCC-трение (права только через GUI; re-grant Screen Recording) | Ф3.1, Ф3.7.1: визард + headless-исследование до старта работ |
+| MS3 | objc2-байндинги слабее ожиданий | Ф3.1.1 AC-4: эскалация до Ф3.2 |
+| Все | Гонка с вендорами (RHEL Lightspeed, Apple/Siri) | Не закрывается задачами: смягчается скоростью MS1→MS2 и открытым контрактом (MCP, ACP) |
+
+### 4.3. Метрики успеха (по питчу)
+
+- **TTFM < 5 минут** — на каждой платформе своего tier к концу её майлстоуна (замер — автотест онбординга: Ф1.8, Ф2.6, Ф3.7).
+- **North star** — успешные агентные задачи в неделю: замеряется с релиза MS1 без телеметрии (опрос + трекинг issues).
+- Retention D30, % задач без ручного вмешательства — пересматриваются на каждом релизе.
+
+### 4.4. Что осознанно не планируется (un-план)
+
+Сетевые write-действия; смена сетевого бэкенда; бэкпорты systemd; программная выдача TCC; consent-брокер с UI — никогда (гранты только вне контура агента: TOML-конфиг, `omnibus grant`, `omnibus doctor` — CLI, исполняет человек; in-band подтверждение от агента неотличимо от подделки); собственный формат плагинов (MCP — стандарт); серверные/headless-профили ОС; вынос `omnibus-contracts` в отдельный репозиторий — только при первом внешнем контрибьюторе адаптера (§8.8.3, решение не по календарю); модельные вызовы из omnibusd — никогда (инференс целиком в контуре агента юзера); local-ML в сервере — только теоретический остаток: embeddings для поиска (миллисекундные модели, не LLM), как опциональный адаптер, если когда-нибудь понадобятся; событийный канал a11y — вне v1 (ни push, ни буферизованный поллинг): watch-сценарии покрываются опросом `journal_query`/`svc_status`, наблюдение UI — опросом `desktop.tree` (пересмотр — при первом сценарии, которому опроса мало; push зависит от разнородной поддержки подписок в MCP-клиентах); эмуляция ввода (ydotool/uinput на Linux, CGEvent на macOS) — вне v1: typed-запись покрывает целевые сценарии, «последняя инстанция» вернётся opt-in-расширением только при доказанном кейсе; постоянный демон, admin-канал (сокет/D-Bus) и HTTP-транспорт — вне v1 (stdio-child покрывает целевые сценарии, координация инстансов — file-lock; пересмотр — при серверных/headless-профилях).
