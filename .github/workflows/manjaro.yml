@@ -1,0 +1,193 @@
+# Omnibus CI — the Manjaro-own matrix (roadmap task 2.4.1).
+#
+# Manjaro is T1 with its own test matrix: alpm/journald/systemd1/atspi behave
+# as on Arch; the differences (delayed repos, mhwd drivers, pamac) are probe
+# facts, not quiet divergences. This workflow owns the Manjaro side:
+#
+#   manjaro-container — the gate + test suites + smoke demos inside a
+#                       manjaro/base-devel container. Job-level
+#                       continue-on-error: the rolling image tag can be
+#                       unpullable; that must never red-lock main.
+#   arch-fallback     — the same gate + smoke on an archlinux:base-devel
+#                       container, always green-blocking. Documented stand-in:
+#                       Manjaro is the arch family, so this is a smoke signal,
+#                       NOT the T1 guarantee — the guarantee lives on hardware.
+#   manjaro-vm-matrix — the true T1 legs (GNOME/KDE x X11/Wayland on Manjaro
+#                       VMs with non-free mhwd video drivers). Manual-dispatch
+#                       only, skipped by default until real runners exist
+#                       (TODO markers below).
+#
+# The full run-on-hardware acceptance script is the planned runbook
+# docs/verification/ms1-ms2-manjaro-acceptance.md — it lands together with the
+# VM legs (task 2.4.1 AC "green on Manjaro-VMs"). Until then, every run of this
+# workflow must print which legs were container-stand-ins and which were real.
+
+name: manjaro
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Sunday 03:17 UTC — the Manjaro track is not per-PR (the main
+    # `ci` workflow already gates every push/PR); this matrix guards drift.
+    - cron: "17 3 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manjaro-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  manjaro-container:
+    name: manjaro/base-devel container (gate + suites + smoke)
+    # Continue-on-error at the JOB level, for image availability only: the
+    # `manjaro/base-devel` tag is a rolling community image and a failed pull
+    # is an infrastructure miss, not a code regression. Every test failure
+    # inside the container still surfaces as an annotation (red job marker).
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      # If this tag stops resolving, keep the workflow honest by moving the
+      # gate to the arch-fallback job below and noting the change here — do
+      # NOT silently report Arch results as Manjaro results.
+      image: manjaro/base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and session deps (pacman)
+        run: |
+          set -euo pipefail
+          # --needed keeps reruns cheap; delayed-repo drift is a probe fact and
+          # must surface in the smoke output, never be papered over here.
+          pacman -Syu --noconfirm --needed git rust at-spi2-core
+
+      - name: Gate (specs + lint)
+        run: |
+          set -euo pipefail
+          make specs
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo run -p omnibus-lints --bin omnibus-lints
+          cargo test -p omnibus-lints --test fixtures
+
+      - name: Build + full test suite
+        run: |
+          set -euo pipefail
+          cargo build --workspace
+          cargo test --workspace
+
+      - name: Smoke demos 1-3
+        run: ci/smoke/run-demos.sh
+
+  arch-fallback:
+    name: archlinux fallback container (gate + suites + smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and session deps (pacman)
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed git rust at-spi2-core
+
+      - name: Gate (specs + lint)
+        run: |
+          set -euo pipefail
+          make specs
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo run -p omnibus-lints --bin omnibus-lints
+          cargo test -p omnibus-lints --test fixtures
+
+      - name: Build + full test suite
+        run: |
+          set -euo pipefail
+          cargo build --workspace
+          cargo test --workspace
+
+      - name: Smoke demos 1-3
+        run: ci/smoke/run-demos.sh
+
+  manjaro-vm-matrix:
+    name: Manjaro VM ${{ matrix.de }} / ${{ matrix.session }} (mhwd non-free)
+    # TODO(roadmap 2.4.1): this job stays SKIPPED until the true-VM legs exist:
+    #
+    #   1. Provision four Manjaro VMs, one per combo below, each with the
+    #      non-free mhwd video driver for its GPU (the 2.4.1 AC "mhwd
+    #      specifics do not break the desktop subsystem" is only meaningful
+    #      on real drivers, never in a container).
+    #   2. Register them as self-hosted runners labeled exactly:
+    #      manjaro-gnome-x11, manjaro-gnome-wayland,
+    #      manjaro-kde-x11,   manjaro-kde-wayland.
+    #   3. Add the repo variable MANJARO_VM_ENABLED=true (Settings -> Secrets
+    #      and variables -> Actions -> Variables). While it is unset or false,
+    #      this job evaluates to false and is skipped — by design, so the
+    #      workflow never fakes a green VM matrix.
+    #   4. Follow docs/verification/ms1-ms2-manjaro-acceptance.md (planned
+    #      runbook, lands with these legs) for the acceptance checklist,
+    #      including the delayed-repo probe observation AC.
+    if: github.event_name == 'workflow_dispatch' && vars.MANJARO_VM_ENABLED == 'true'
+    runs-on: ${{ matrix.runner-label }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - de: gnome
+            session: x11
+            runner-label: manjaro-gnome-x11
+          - de: gnome
+            session: wayland
+            runner-label: manjaro-gnome-wayland
+          - de: kde
+            session: x11
+            runner-label: manjaro-kde-x11
+          - de: kde
+            session: wayland
+            runner-label: manjaro-kde-wayland
+    env:
+      DE: ${{ matrix.de }}
+      SESSION: ${{ matrix.session }}
+    steps:
+      # TODO(roadmap 2.4.1): on the VMs the runner user owns the session; the
+      # suite runs against the REAL desktop (no Xvfb here).
+      - uses: actions/checkout@v4
+
+      - name: Gate (specs + lint)
+        run: |
+          set -euo pipefail
+          make specs
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo run -p omnibus-lints --bin omnibus-lints
+          cargo test -p omnibus-lints --test fixtures
+
+      - name: Build + full test suite
+        run: |
+          set -euo pipefail
+          cargo build --workspace
+          cargo test --workspace
+
+      - name: Smoke demos 1-3 against the real session
+        # On real VM legs the a11y/journal/package legs must actually run:
+        # a SKIP here means a broken session, not an honest absence.
+        run: ci/smoke/run-demos.sh
+
+      - name: Probe report — mhwd and delayed repos must be visible
+        run: |
+          set -euo pipefail
+          # TODO(roadmap 2.4.1 AC): assert the probe surfaces the Manjaro facts
+          # (delayed repos, mhwd presence, pamac) instead of reporting silence.
+          # Example shape once the CLI supports it:
+          #   ./target/debug/omnibusd doctor | tee probe-report.txt
+          #   grep -q 'manjaro(delayed_repos=true' probe-report.txt
+          echo "TODO(2.4.1): assert delayed-repos/mhwd/pamac appear in the probe report"

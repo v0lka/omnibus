@@ -1,0 +1,126 @@
+# Packager: Omnibus contributors
+#
+# In-repo packaging for omnibusd (roadmap task 1.8.1, in-repo part).
+# Build this file with makepkg from packaging/ against the repository working
+# tree: sources are the repo itself, so `source` stays empty and build() runs
+# cargo against $startdir (the directory containing this PKGBUILD).
+#
+# Scope manifest templates are shipped read-only to /etc/omnibus/scopes.d/
+# (see scopes.d/ next to this file). The daemon never edits them; a human
+# grants writes by dropping additional manifests there out-of-band.
+#
+# Manjaro delta (roadmap tasks 2.4.1 / 2.5.2) - packaged here, not in a
+# separate packaging/PKGBUILD.manjaro variant, because the delta is small:
+#   * Same alpm backend. Manjaro is an arch-family distro: libalpm, pacman,
+#     journald, systemd1 and AT-SPI2 behave as on Arch, so one PKGBUILD
+#     covers both and the probe picks the Manjaro branch at runtime
+#     (delayed repos, mhwd, pamac are noted in the probe report).
+#   * Delayed repositories: Manjaro mirrors sync later than Arch. This is
+#     detected and reported by omnibus-probe; the package does not pin
+#     versions and installs the same binary on both distros.
+#   * Manjaro kb overlay: this package ships three short articles under
+#     /usr/share/omnibus/kb-manjaro/ (mhwd video drivers, pamac vs pacman,
+#     delayed mirrors). They are plain markdown consumed by the wiki tools
+#     alongside ArchWiki; applicability is judged by the agent (P7), there
+#     is no playbook machinery.
+#   * No AUR upload here: publishing to AUR is out of scope for this file
+#     (task 1.8.1 covers the in-repo PKGBUILD only).
+#
+# License: no LICENSE file exists in the repository yet; the `license`
+# field is intentionally omitted until upstream designates one.
+
+pkgname=omnibus
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='omnibusd - uniform, auditable, least-privilege MCP API over a desktop OS'
+arch=('x86_64')
+url=''
+depends=('pacman' 'systemd' 'at-spi2-core')
+makedepends=('rust' 'cargo')
+options=('strip')
+source=()
+md5sums=()
+
+build() {
+  cd "$startdir"
+  cargo build --release
+}
+
+package() {
+  # One static binary; adapters are selected at install/run time, not by
+  # packaging separate per-distro binaries.
+  install -Dm0755 "$startdir/target/release/omnibusd" \
+    "$pkgdir/usr/bin/omnibusd"
+
+  # Scope manifest templates: read-only defaults. Admins extend write
+  # grants by adding their own manifests under /etc/omnibus/scopes.d/;
+  # the shipped default stays empty of write grants.
+  install -d "$pkgdir/etc/omnibus/scopes.d"
+  install -m0644 "$startdir"/scopes.d/*.toml \
+    "$pkgdir/etc/omnibus/scopes.d/"
+
+  # Manjaro knowledge-base overlay (task 2.5.2), inlined here because the
+  # articles are short and upstream packaging owns no content directory
+  # yet. Plain markdown; the kb adapter serves them next to ArchWiki.
+  install -d "$pkgdir/usr/share/omnibus/kb-manjaro"
+
+  cat > "$pkgdir/usr/share/omnibus/kb-manjaro/mhwd-video-drivers.md" <<'EOF'
+# Video drivers with mhwd (Manjaro)
+
+Manjaro manages graphics drivers through the Manjaro Hardware Detection
+tool (`mhwd`). List installed profiles with `mhwd -li`; install a driver
+non-interactively with `mhwd -a pci free 0300` (free) or
+`mhwd -a pci nonfree 0300` (proprietary, when wanted deliberately).
+
+Omnibus notes:
+
+- The desktop subsystem of omnibusd talks to the accessibility stack
+  (AT-SPI2), not to the driver stack, so a free or proprietary driver
+  does not change which desktop capabilities are present.
+- After a driver switch, log out and back in so the session restarts and
+  the accessibility bus comes up in the new session.
+- Proprietary-driver sessions are the usual source of compositor
+  quirks; if desktop reading looks wrong, check `journal_query` for the
+  display-manager unit before suspecting Omnibus.
+EOF
+
+  cat > "$pkgdir/usr/share/omnibus/kb-manjaro/pamac-vs-pacman.md" <<'EOF'
+# pamac vs pacman (Manjaro)
+
+Both tools manage the same package database through the same alpm
+backend. `pacman` is the command-line manager shared with Arch; `pamac`
+is Manjaro's own manager (GUI plus a `pamac` CLI) with extra features
+such as AUR access and update-notifier behavior.
+
+Omnibus notes:
+
+- Package capabilities of omnibusd go through libalpm, so a package
+  state written by pamac and one written by pacman are indistinguishable
+  to `pkg_list` / `pkg_info`.
+- For unattended or scripted work (including anything an agent does via
+  grants), prefer pacman: it has no interactive prompts and no AUR
+  surface, which keeps the action reproducible.
+- pamac's AUR layer builds from external sources; such packages sit
+  outside the alpm repos the probe reports, and Omnibus does not read
+  them beyond what libalpm records.
+EOF
+
+  cat > "$pkgdir/usr/share/omnibus/kb-manjaro/delayed-mirrors.md" <<'EOF'
+# Delayed repositories (Manjaro)
+
+Manjaro intentionally holds packages back for testing before release, so
+its mirrors receive updates later than Arch does - typically days, and
+longer for large stacks such as a kernel or a desktop upgrade.
+
+Omnibus notes:
+
+- The probe reports the repository state it sees; a version that looks
+  stale compared to Arch is expected, not a fault.
+- If a fix you need is in a newer upstream package, sync mirrors first:
+  `sudo pacman-mirrors --fasttrack && sudo pacman -Syyu`.
+- Before pinning versions or downgrading (for example with `pkg_undo`
+  from the package cache), confirm the available version list with
+  `pkg_info` - the delayed view, not the Arch one, is what alpm will
+  offer on this machine.
+EOF
+}

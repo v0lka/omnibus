@@ -1,0 +1,18 @@
+[package]
+name = "omnibus-adapter-nm"
+version.workspace = true
+edition.workspace = true
+description = "NetworkManager adapter: read-only net_status over the NM D-Bus API (roadmap 2.2.3). The network domain is read-only by design (never-list: no switching, no write methods)."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
+omnibus-contracts = { path = "../omnibus-contracts" }
+async-trait = "0.1"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

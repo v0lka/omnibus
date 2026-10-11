@@ -10,3 +10,12 @@ workspace = true
 [dependencies]
 # Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
 omnibus-contracts = { path = "../omnibus-contracts" }
+async-trait = "0.1"
+# System-bus D-Bus client; the tokio runtime integration, no blocking API.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+serde = "1"
+# Call-level budgets (TimeoutError mapping) around D-Bus round trips.
+tokio = { version = "1", features = ["time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

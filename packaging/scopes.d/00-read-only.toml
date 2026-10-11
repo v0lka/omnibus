@@ -1,0 +1,41 @@
+# omnibus scope manifest - shipped default (read-only by default)
+#
+# This file is the packaged default for /etc/omnibus/scopes.d/. It grants
+# nothing: the default install exposes only the read-only tools. Grants are
+# issued by a human, out-of-band, by placing additional manifests in
+# /etc/omnibus/scopes.d/ - there is no runtime consent API, and no token an
+# agent provides can ever produce a write grant (the never-list).
+#
+# File naming: manifests load in lexical order (hence the 00- prefix for the
+# shipped default). A later manifest may widen a scope, never narrow a
+# shipped default; remove nothing you did not add.
+#
+# Format: flat TOML sections, one per scope kind. The example names below use
+# the dotted capability registry spelling from omnibus-contracts; they are
+# ILLUSTRATION ONLY - this default file must stay empty of actual grants.
+#
+# [write]
+#   Tools that mutate the system. A write capability is active only when it
+#   appears in a human-provisioned [write] section; without it the tool is
+#   hidden from tools/list and a direct call returns CapabilityRequired with
+#   a doctor hint. Examples (NOT granted here):
+#     desktop.write.typed   - typed UI writes (set_value / invoke)
+#     portal.clipboard      - clipboard write via the desktop portal
+#     portal.notify         - desktop notifications via the portal
+#     service.write         - start / stop systemd units
+#     pkg.write             - install / remove packages via alpm
+#     pkg.undo              - downgrade from the package cache
+#     files.scope.write     - writes inside the granted file scope
+#
+# [optin]
+#   Capabilities that need an explicit opt-in decision in addition to the
+#   grant itself (the doctor walks the human through issuance; the daemon
+#   never collects consent itself). Examples (NOT granted here):
+#     journal.persistent    - enable persistent journald storage
+#
+# Read-only capabilities (desktop.tree, journal.query, service.read,
+# pkg.read, portal.screenshot, files.scope.read, kb.present, net.read) need
+# no manifest entry: they are always exposed on a supported platform.
+
+# [write]
+# [optin]

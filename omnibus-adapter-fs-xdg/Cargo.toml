@@ -10,3 +10,10 @@ workspace = true
 [dependencies]
 # Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
 omnibus-contracts = { path = "../omnibus-contracts" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+base64 = "0.22"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

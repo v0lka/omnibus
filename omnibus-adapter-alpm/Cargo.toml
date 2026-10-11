@@ -10,3 +10,13 @@ workspace = true
 [dependencies]
 # Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
 omnibus-contracts = { path = "../omnibus-contracts" }
+async-trait = "0.1"
+# Links the system libalpm (pacman); ALPM handles never leave this crate.
+alpm = "5"
+# Typed PKG_UNDO capability value (JSON enum: none / cache-downgrade / transactional).
+serde_json = "1"
+# spawn_blocking around blocking libalpm calls.
+tokio = { version = "1", features = ["rt", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

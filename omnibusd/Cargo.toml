@@ -1,0 +1,31 @@
+[package]
+name = "omnibusd"
+version.workspace = true
+edition.workspace = true
+description = "The Omnibus daemon binary: the composition root. Assembles probe -> registry -> core -> facade and serves one stdio MCP session. The only crate that links adapters."
+
+[lints]
+workspace = true
+
+# The composition root is the single place adapter crates meet (R4-EDGES): the
+# core library itself never links them; this binary target wires what the probe
+# selected. `omnibus grant` / `omnibus doctor` (CLI, human-executed) live here.
+[dependencies]
+omnibus-contracts = { path = "../omnibus-contracts" }
+omnibus-core = { path = "../omnibus-core" }
+omnibus-probe = { path = "../omnibus-probe" }
+omnibus-adapter-atspi = { path = "../omnibus-adapter-atspi" }
+omnibus-adapter-journald = { path = "../omnibus-adapter-journald" }
+omnibus-adapter-systemd1 = { path = "../omnibus-adapter-systemd1" }
+omnibus-adapter-alpm = { path = "../omnibus-adapter-alpm" }
+omnibus-adapter-xdg-portals = { path = "../omnibus-adapter-xdg-portals" }
+omnibus-adapter-fs-xdg = { path = "../omnibus-adapter-fs-xdg" }
+omnibus-adapter-kb-archwiki = { path = "../omnibus-adapter-kb-archwiki" }
+omnibus-adapter-nm = { path = "../omnibus-adapter-nm" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "process"] }
+serde_json = "1"
+toml = "0.9"
+
+[[bin]]
+name = "omnibusd"
+path = "src/main.rs"

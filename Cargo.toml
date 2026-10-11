@@ -7,6 +7,7 @@ resolver = "2"
 members = [
     "omnibus-contracts",
     "omnibus-core",
+    "omnibusd",
     "omnibus-probe",
     "omnibus-adapter-atspi",
     "omnibus-adapter-journald",
@@ -15,6 +16,7 @@ members = [
     "omnibus-adapter-xdg-portals",
     "omnibus-adapter-fs-xdg",
     "omnibus-adapter-kb-archwiki",
+    "omnibus-adapter-nm",
     "omnibus-lints",
 ]
 

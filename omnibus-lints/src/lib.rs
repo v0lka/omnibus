@@ -195,18 +195,23 @@ pub fn lint_native(root: &Path) -> Vec<Finding> {
         }
     }
 
+    let module_names = declared_modules(root);
     for path in rust_files(root, "omnibus-contracts/src") {
         for (idx, line) in read_lines(&path).iter().enumerate() {
             let Some(crate_name) = external_use_crate(line) else {
                 continue;
             };
-            let allowed = crate_name == "std"
-                || crate_name == "core"
-                || crate_name == "alloc"
-                || crate_name == "crate"
-                || crate_name == "self"
-                || crate_name == "super"
-                || CONTRACTS_ALLOWED_DEPS.contains(&crate_name.as_str());
+            let normalized = crate_name.replace('-', "_");
+            let allowed = normalized == "std"
+                || normalized == "core"
+                || normalized == "alloc"
+                || normalized == "crate"
+                || normalized == "self"
+                || normalized == "super"
+                || module_names.contains(&normalized)
+                || CONTRACTS_ALLOWED_DEPS
+                    .iter()
+                    .any(|d| d.replace('-', "_") == normalized);
             if !allowed {
                 findings.push(Finding::new(
                     RULE_NATIVE,
@@ -218,6 +223,29 @@ pub fn lint_native(root: &Path) -> Vec<Finding> {
         }
     }
     findings
+}
+
+/// In-tree module names of `omnibus-contracts/src` (plain `pub mod x;` / `mod x;`
+/// declarations). A 2015-style relative `use families::…` inside the same tree is
+/// internal, not a native leak; the text lint needs this set to tell them apart.
+fn declared_modules(root: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    for path in rust_files(root, "omnibus-contracts/src") {
+        for line in read_lines(&path) {
+            let trimmed = line.trim();
+            let rest = trimmed
+                .strip_prefix("pub mod ")
+                .or_else(|| trimmed.strip_prefix("mod "));
+            if let Some(rest) = rest
+                && let Some(name) = rest.split([';', '{', ' ']).next()
+                && !name.is_empty()
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 /// Extracts the crate name from a `use` line, if it is a plain `use x::...` item
@@ -272,7 +300,11 @@ pub fn manifest_dependency_names(manifest: &Path) -> Vec<String> {
 /// Rule 3 (R4-CON): capability name literals may appear only in the registry file.
 ///
 /// A capability literal is a double-quoted string of `{domain}.{feature}[.{qualifier}]`
-/// shape: lowercase first segment, at least two dot-separated segments.
+/// shape: at least two dot-separated segments, every segment lowercase, and the
+/// first segment a capability domain of the registry (desktop, journal, service,
+/// pkg, portal, files, kb, net). Restricting the first segment to registry domains
+/// keeps D-Bus names like `org.freedesktop.systemd1` out of scope while every
+/// capability-shaped literal stays registry-only.
 pub fn lint_con(root: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
     for dir in [
@@ -324,6 +356,9 @@ fn scan_capability_literals(root: &Path, path: &Path, findings: &mut Vec<Finding
 }
 
 fn looks_like_capability_name(s: &str) -> bool {
+    const DOMAINS: [&str; 8] = [
+        "desktop", "journal", "service", "pkg", "portal", "files", "kb", "net",
+    ];
     let segments: Vec<&str> = s.split('.').collect();
     segments.len() >= 2
         && segments.iter().all(|seg| {
@@ -333,6 +368,9 @@ fn looks_like_capability_name(s: &str) -> bool {
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
         })
+        && segments
+            .first()
+            .is_some_and(|first| DOMAINS.contains(first))
 }
 
 /// Rule 4 (R4-EDGES): the dependency direction over all workspace manifests.
