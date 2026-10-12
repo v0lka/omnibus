@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke demo №3 «После обновления» / "After the update" (roadmap 1.8.2):
+# Smoke demo 3 — "After the update" (roadmap 1.8.2):
 # pkg_list + pkg_info(bash), then pkg_undo honest refusals.
 #
 # Default (read-only, no grants anywhere):

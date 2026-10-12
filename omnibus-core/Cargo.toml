@@ -2,7 +2,7 @@
 name = "omnibus-core"
 version.workspace = true
 edition.workspace = true
-description = "Omnibus core: MCP facade, sessions, grants, audit pipeline, capabilities document, doctor. OS-agnostic; adapters arrive through the probe-assembled registry."
+description = "Omnibus core: MCP facade, sessions, grants, audit pipeline, capabilities document, doctor. OS-agnostic except the confined write-gate, audit-key and file-fallback sink, and grant-manifest/path-resolution OS access (write_gate.rs, audit.rs, scopes.rs; see specs/architecture/layers-and-crates.md); adapters arrive through the probe-assembled registry."
 
 [lints]
 workspace = true

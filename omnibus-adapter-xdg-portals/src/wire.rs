@@ -2,6 +2,7 @@
 //! URI decoding, and portal response parsing. Unit-tested without D-Bus.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use zbus::zvariant::OwnedValue;
@@ -21,16 +22,27 @@ pub fn request_path(sender: &str, token: &str) -> String {
     format!("/org/freedesktop/portal/desktop/request/{sender}/{token}")
 }
 
+/// Process-global sequence making handle tokens unique within this process:
+/// two concurrent portal requests must never share a request object path, or
+/// the portal's two Response signals cross-deliver between their streams.
+static HANDLE_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// Fresh alphanumeric handle token (the portal spec allows `[A-Za-z0-9_]+`).
+/// A millisecond timestamp keeps tokens readable and roughly sortable; the
+/// process-global counter guarantees uniqueness for concurrent requests —
+/// millisecond resolution alone lets two requests collide on one request path.
 pub fn new_handle_token() -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    format!("omnibus_{millis}")
+    let seq = HANDLE_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("omnibus_{millis}_{seq}")
 }
 
-/// Percent-decodes a URI path segment (`%20` and `+` as space).
+/// Percent-decodes a URI path segment: `%XX` escapes only. A literal `+`
+/// stays a plus — space-as-`+` is `application/x-www-form-urlencoded`
+/// semantics, not URI path semantics (RFC 8089/3986).
 pub fn percent_decode(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -50,10 +62,6 @@ pub fn percent_decode(input: &str) -> String {
                     out.push(b'%');
                     index += 1;
                 }
-            }
-            b'+' => {
-                out.push(b' ');
-                index += 1;
             }
             byte => {
                 out.push(byte);
@@ -124,8 +132,51 @@ mod tests {
     fn percent_decode_handles_spaces_and_bare_percent() {
         assert_eq!(percent_decode("/home/x%20y.png"), "/home/x y.png");
         assert_eq!(percent_decode("100%"), "100%");
-        assert_eq!(percent_decode("a+b"), "a b");
+        // Regression (#27): `+` is a literal plus in URI paths; only `%XX`
+        // escapes decode, and `%2B` still yields a plus.
+        assert_eq!(percent_decode("a+b"), "a+b");
+        assert_eq!(percent_decode("a%2Bb"), "a+b");
         assert_eq!(percent_decode("/plain"), "/plain");
+    }
+
+    #[test]
+    fn file_uris_keep_literal_plus_in_paths() {
+        assert_eq!(
+            file_uri_to_path("file:///home/x/shot+1.png"),
+            Some(String::from("/home/x/shot+1.png"))
+        );
+        assert_eq!(
+            file_uri_to_path("file:///home/x/shot%2B1.png"),
+            Some(String::from("/home/x/shot+1.png"))
+        );
+    }
+
+    #[test]
+    fn handle_tokens_are_unique_across_threads() {
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 128;
+        let workers: Vec<_> = (0..THREADS)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    (0..PER_THREAD)
+                        .map(|_| new_handle_token())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let mut tokens = workers
+            .into_iter()
+            .flat_map(|worker| worker.join().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tokens.len(),
+            THREADS * PER_THREAD,
+            "every minted token must be collected"
+        );
+        let minted = tokens.len();
+        tokens.sort();
+        tokens.dedup();
+        assert_eq!(tokens.len(), minted, "concurrent tokens must not collide");
     }
 
     #[test]

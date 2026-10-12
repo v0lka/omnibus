@@ -3,8 +3,9 @@
 //! Native backend: the xdg-desktop-portal service on the session bus plus the
 //! freedesktop notification service. The portal request/response dance is
 //! asynchronous: the Response signal on the predictable request object path is
-//! subscribed before the call and awaited with a 5s inner timeout (the core
-//! budget still applies on top); timeouts map to [`ContractError::TimeoutError`].
+//! subscribed before the call and awaited with a 5s inner timeout (reads
+//! additionally ride the core's tool-call budget; writes are not core-timed —
+//! see `tools::dispatch`); timeouts map to [`ContractError::TimeoutError`].
 //! Native types (portal handles, variant dictionaries) never leave this crate.
 //!
 //! Honesty of the capability ladder (R3):
@@ -32,6 +33,7 @@ use omnibus_contracts::dto::probe::{AdapterReport, CapabilityFact};
 use omnibus_contracts::errors::ContractError;
 use omnibus_contracts::spi::portals::{Notify, ScreenCapture};
 use omnibus_contracts::version::CONTRACT_VERSION;
+use zbus::connection::Builder;
 use zbus::proxy::{Builder as ProxyBuilder, CacheProperties};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, Proxy};
@@ -56,6 +58,12 @@ const IFACE_NOTIFICATIONS: &str = "org.freedesktop.Notifications";
 const RESPONSE_BUDGET: Duration = Duration::from_secs(5);
 /// Inner timeout for one synchronous portal/notification call.
 const CALL_BUDGET: Duration = Duration::from_secs(5);
+/// The screenshot read cap: one call never buffers more than this much of
+/// the portal-produced file (the result then holds the bytes twice over —
+/// raw plus base64). Sits far above any legitimate desktop capture (a busy
+/// 4K PNG stays well under 10 MiB) and far below anything that could
+/// pressure the daemon.
+const MAX_SCREENSHOT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Live portal backend over the session bus.
 #[derive(Clone)]
@@ -74,9 +82,17 @@ pub struct PortalsAdapter {
 impl PortalsAdapter {
     /// Connects to the session bus and probes the portal and notification
     /// services. Fails with [`ContractError::AdapterUnavailable`] only when no
-    /// session bus is reachable at all.
+    /// session bus is reachable at all; a bus that answers but a portal that
+    /// never replies degrades to "absent" capability facts instead.
     pub async fn connect() -> Result<Self, ContractError> {
-        let conn = Connection::session()
+        // The probes below run on this connection; `method_timeout` bounds
+        // every method call issued on it (zbus defaults to no timeout), so a
+        // session bus that never answers Introspect/NameHasOwner degrades to
+        // "portal absent" instead of hanging daemon startup forever.
+        let conn = Builder::session()
+            .map_err(|_| ContractError::AdapterUnavailable)?
+            .method_timeout(CALL_BUDGET)
+            .build()
             .await
             .map_err(|_| ContractError::AdapterUnavailable)?;
         let portal_present = name_has_owner(&conn, PORTAL_DEST).await;
@@ -291,14 +307,58 @@ impl PortalsAdapter {
             .ok_or_else(|| Self::native("the portal response carries no uri"))?;
         let path = wire::file_uri_to_path(&uri)
             .ok_or_else(|| Self::native(format!("unreadable screenshot uri {uri}")))?;
-        let bytes = tokio::fs::read(&path)
-            .await
-            .map_err(|e| Self::native(format!("cannot read {path}: {e}")))?;
+        let bytes = Self::read_bounded(&path).await?;
         Ok(ScreenshotResult {
             mime: String::from("image/png"),
             image_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             size_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         })
+    }
+
+    /// Reads the portal-produced screenshot under the bounded-capture
+    /// discipline the rest of this changeset reads bytes with:
+    /// - a non-regular file is refused (`Unsupported`) — a FIFO or device
+    ///   would park the open or stream forever;
+    /// - the size is judged on the opened handle (fs-xdg's "judge the
+    ///   handle, not the path" idiom), then bounded a second time by a hard
+    ///   `take` cap, so even a file growing between the two checks cannot
+    ///   inflate the buffer past [`MAX_SCREENSHOT_BYTES`];
+    /// - oversize is a typed cap refusal, mirroring `fs_write`'s.
+    ///
+    /// The per-component `O_NOFOLLOW` scope walk of `fs_read` is deliberately
+    /// not replicated: the URI here is minted by the portal on the session
+    /// bus — a system component, never an untrusted MCP client — so the
+    /// out-of-scope-redirect threat that walk closes does not exist here.
+    async fn read_bounded(path: &str) -> Result<Vec<u8>, ContractError> {
+        use tokio::io::AsyncReadExt as _;
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| Self::native(format!("cannot read {path}: {e}")))?;
+        // Judge the handle, not the path.
+        let meta = file
+            .metadata()
+            .await
+            .map_err(|e| Self::native(format!("cannot read {path}: {e}")))?;
+        if !meta.is_file() {
+            return Err(ContractError::Unsupported {
+                reason: format!("screenshot: not a regular file: {path}"),
+            });
+        }
+        if meta.len() > MAX_SCREENSHOT_BYTES {
+            return Err(screenshot_cap_error(meta.len()));
+        }
+        let mut bytes = Vec::new();
+        let took = file
+            // +1 turns a concurrent size growth into the same honest cap
+            // refusal instead of a silently bigger buffer.
+            .take(MAX_SCREENSHOT_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|e| Self::native(format!("cannot read {path}: {e}")))?;
+        if took as u64 > MAX_SCREENSHOT_BYTES {
+            return Err(screenshot_cap_error(took as u64));
+        }
+        Ok(bytes)
     }
 
     /// Shows one notification through the freedesktop notification service.
@@ -335,6 +395,17 @@ impl PortalsAdapter {
         // returned id is its handle (0 would mean no notification was shown).
         let (id,): (u32,) = call.body().deserialize().map_err(Self::native)?;
         Ok(NotifyResult { delivered: id > 0 })
+    }
+}
+
+/// The typed over-cap refusal for a screenshot read (the `fs_write`
+/// `write_cap_error` shape, in the screenshot wording).
+fn screenshot_cap_error(bytes: u64) -> ContractError {
+    ContractError::Unsupported {
+        reason: format!(
+            "screenshot: {bytes} bytes exceeds the {} MiB per-call capture cap",
+            MAX_SCREENSHOT_BYTES / (1024 * 1024)
+        ),
     }
 }
 
@@ -545,5 +616,53 @@ mod tests {
         };
         let back: _ScreenshotResult = serde_json::from_str(&text).unwrap_or(fallback);
         assert_eq!(back, result);
+    }
+
+    /// A unique scratch path under the session temp dir; the read_bounded
+    /// tests never touch a bus, so they run on headless machines too.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("omnibus-portals-{}-{name}", std::process::id()))
+    }
+
+    #[tokio::test]
+    async fn screenshot_read_serves_a_regular_file_within_the_cap() {
+        let path = scratch("ok.png");
+        std::fs::write(&path, b"pngbytes").expect("seed scratch file");
+        let bytes = PortalsAdapter::read_bounded(path.to_str().expect("utf8 temp path"))
+            .await
+            .expect("in-cap read must succeed");
+        assert_eq!(bytes, b"pngbytes".to_vec());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn screenshot_read_refuses_non_regular_files() {
+        // A directory: on Linux open() succeeds, so the refusal must come
+        // from the handle check, not from the open itself.
+        let dir = scratch("dir.png");
+        std::fs::create_dir_all(&dir).expect("seed scratch dir");
+        let refused = PortalsAdapter::read_bounded(dir.to_str().expect("utf8 temp path")).await;
+        assert!(
+            matches!(refused, Err(ContractError::Unsupported { .. })),
+            "a non-regular file must be refused: {refused:?}"
+        );
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[tokio::test]
+    async fn screenshot_read_refuses_files_over_the_cap() {
+        let path = scratch("huge.png");
+        // Sparse: the oversize lives in the metadata, not on disk.
+        let file = std::fs::File::create(&path).expect("seed scratch file");
+        file.set_len(MAX_SCREENSHOT_BYTES + 1).expect("oversize");
+        drop(file);
+        let refused = PortalsAdapter::read_bounded(path.to_str().expect("utf8 temp path")).await;
+        match refused {
+            Err(ContractError::Unsupported { reason }) => {
+                assert!(reason.contains("capture cap"), "{reason}");
+            }
+            other => panic!("over-cap read must be refused, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&path);
     }
 }

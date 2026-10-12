@@ -30,7 +30,13 @@ impl Probe {
     }
 
     /// Adapter candidates for the platform family (task 2.1.1): exactly one
-    /// package backend per family; NM is subsystem-level, not family-level.
+    /// package backend per family; NM is subsystem-level, not family-level;
+    /// knowledge follows the per-distro Knowledge column of
+    /// specs/architecture/platform-matrix.md — ArchWiki is the promised source
+    /// only on the Arch and Manjaro rows (Debian wiki, Ubuntu docs, Mint
+    /// docs/forums and Fedora docs adapters do not exist yet), so other
+    /// families get honest absence instead of a source the matrix does not
+    /// promise (R7).
     fn adapter_candidates(family: DistroFamily, net_alive: bool) -> Vec<String> {
         let mut adapters: Vec<String> = vec![
             String::from("atspi"),
@@ -47,7 +53,12 @@ impl Probe {
         }
         adapters.push(String::from("xdg-portals"));
         adapters.push(String::from("fs-xdg"));
-        adapters.push(String::from("kb-archwiki"));
+        if matches!(family, DistroFamily::Arch | DistroFamily::Manjaro) {
+            // Platform matrix, Knowledge column: ArchWiki (Arch) and ArchWiki +
+            // Manjaro overlay (Manjaro) only; every other family promises its
+            // own KB source, not ArchWiki.
+            adapters.push(String::from("kb-archwiki"));
+        }
         if net_alive {
             adapters.push(String::from("nm"));
         }
@@ -95,8 +106,15 @@ impl PlatformProbe for Probe {
             .await
             .as_deref()
             .and_then(detect::parse_systemd_version);
+        // systemd1 liveness = bus-name ownership, probed like every other
+        // daemon (specs/architecture/platform-matrix.md: Services = systemd1 on
+        // every Linux row; the only sanctioned hiding reasons are a missing
+        // provider and the version floor, never the system state).
+        // `systemctl is-system-running` encodes *state*, not presence: its
+        // non-zero exit for a healthy-but-"degraded" system (one failed unit
+        // suffices) would hide svc_* on the most common real-world state.
         let systemd_alive = r
-            .run("/usr/bin/systemctl", &["is-system-running"])
+            .run("/usr/bin/busctl", &["status", "org.freedesktop.systemd1"])
             .await
             .is_some();
 
@@ -270,7 +288,7 @@ mod tests {
                 "/usr/bin/systemctl --version",
                 "systemd 257 (257.8-1-MANJARO)\n",
             )
-            .stub("/usr/bin/systemctl is-system-running", "running\n")
+            .stub("/usr/bin/busctl status org.freedesktop.systemd1", "ok\n")
             .stub("/usr/bin/busctl --user status org.a11y.Bus", "ok\n")
             .stub(
                 "/usr/bin/busctl status org.freedesktop.NetworkManager",
@@ -344,8 +362,38 @@ mod tests {
             !report.adapters_selected.iter().any(|a| a == "nm"),
             "NM hidden when the bus name is not alive"
         );
+        assert!(
+            !report.adapters_selected.iter().any(|a| a == "kb-archwiki"),
+            "ArchWiki is promised only on the Arch/Manjaro rows of the Knowledge column"
+        );
         // Floor constants stay in contracts (no magic numbers here).
         assert_eq!(omnibus_contracts::floors::SYSTEMD_FLOOR.major, 252);
         assert_eq!(ATSPI_FLOOR.minor, 50);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn degraded_system_state_keeps_services_present() {
+        // Issue #42 regression: a healthy-but-degraded systemd (one failed
+        // unit is enough; `is-system-running` exits non-zero there) still owns
+        // org.freedesktop.systemd1, so services stay present — hiding them is
+        // reserved for a missing provider or the version floor
+        // (specs/architecture/platform-matrix.md, Services column).
+        let runner = FakeRunner::default()
+            .stub(
+                "/usr/bin/systemctl --version",
+                "systemd 257 (257.8-1-MANJARO)\n",
+            )
+            .stub("/usr/bin/busctl status org.freedesktop.systemd1", "ok\n");
+        let probe = Probe::system(std::sync::Arc::new(runner));
+        let report = probe.detect().await.expect("detect never fails");
+        let systemd1 = report
+            .liveness
+            .iter()
+            .find(|d| d.name == "systemd1")
+            .expect("systemd1 liveness row is always reported");
+        assert!(
+            systemd1.alive,
+            "degraded systemd is alive: svc_* must not hide"
+        );
     }
 }

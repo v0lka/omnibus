@@ -7,8 +7,6 @@ use omnibus_contracts::dto::probe::ManjaroFacts;
 
 use crate::runner::CommandRunner;
 
-const MANJARO_HINTS: [&str; 3] = ["manjaro", "mhwd", "pamac"];
-
 /// Collects the Manjaro facts from the system (pacman.conf, mirrorlist, mhwd,
 /// pamac). Called only when the distro family is Manjaro.
 pub async fn collect(runner: &dyn CommandRunner) -> ManjaroFacts {
@@ -36,15 +34,6 @@ async fn command_present(runner: &dyn CommandRunner, name: &str) -> bool {
             .any(|dir| runner.file_exists(&format!("{dir}/{name}")))
     });
     on_path || runner.run("/usr/bin/which", &[name]).await.is_some()
-}
-
-/// True when any Manjaro hint is visible (used to sanity-check the branch).
-pub fn looks_like_manjaro(runner: &dyn CommandRunner) -> bool {
-    MANJARO_HINTS.iter().any(|hint| {
-        runner
-            .read_file("/etc/os-release")
-            .is_some_and(|text| text.to_ascii_lowercase().contains(hint))
-    })
 }
 
 #[cfg(test)]

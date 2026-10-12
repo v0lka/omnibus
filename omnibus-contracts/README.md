@@ -54,15 +54,18 @@ merge block (R2, quality-gates.md).
   speculative stubs). Announce it in `specs/architecture/spi-registry.md` first —
   specs are the source of truth.
 - Declare DTOs with the `dto!` family so the schema is derived from the same
-  declaration serde uses; the round-trip guard in `dto/` tests (sample from schema
-  → serde → compare) fails the build on drift.
+  declaration serde uses; the typed round-trip guard in `tests/schema.rs` (sample
+  from schema → serde → compare) fails the build on drift, while the in-file
+  `dto/` tests cover Value-level round-trips.
 - Bump `CONTRACT_VERSION` per semver: additive trait/capability/DTO = minor;
   removal or reshaping of a field, an error code, or the capability registry =
   major.
 
 ## Token minting model (honest enforcement statement)
 
-`SessionId` / `ElementId` have no public value constructor (compile-time half,
-proven by the R4 negative fixtures). Minting requires a `MintKey` that the core
-builds from fresh per-process entropy and never shares — the runtime half. See
-`src/tokens.rs`.
+`SessionId` / `ElementId` have no public value constructor — by review discipline
+only, with no R4 fixture pinning it; the enforcement is runtime on both halves.
+Minting requires a `MintKey` that the core builds from fresh per-process entropy
+and never shares, and the derived `Deserialize` accepts arbitrary strings: a
+foreign or stale token is not a constructor escape — it simply fails to resolve,
+and the core answers `ElementStale`. See `src/tokens.rs`.

@@ -39,7 +39,8 @@ human (grants, opt-ins, doctor CLI mutations) -- [architecture/security-model.md
 
 Dependency direction: adapters depend on `omnibus-contracts` only; the core crate depends on contracts
 alone; the composition root (the `omnibusd` binary target) links adapters and registers them through
-the probe-assembled registry; nothing depends on the core. See
+the probe-assembled registry; only the composition-root binary depends on the core — no library
+crate does. See
 [layers-and-crates](architecture/layers-and-crates.md).
 
 ## Directory Listing
@@ -105,6 +106,7 @@ Every file under `specs/`:
 - [decisions/010-single-grant-mechanism.md](decisions/010-single-grant-mechanism.md) - one grant mechanism
 - [decisions/011-closed-registry-just-in-time-traits.md](decisions/011-closed-registry-just-in-time-traits.md) - closed registry, JIT traits
 - [decisions/012-no-playbook-engine.md](decisions/012-no-playbook-engine.md) - no playbook engine
+- [decisions/013-binary-name-omnibusd.md](decisions/013-binary-name-omnibusd.md) - shipped binary name is `omnibusd` (spelling erratum for earlier ADRs)
 
 `tools/`:
 

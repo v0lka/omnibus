@@ -9,7 +9,7 @@ and the only place where traits, DTOs, capability constants, and the error taxon
 
 ```
 +------------------------------------------------------------------------+
-| omnibus-core (binary omnibusd) - OS-agnostic                           |
+| omnibus-core (library) - OS-agnostic                                   |
 |   MCP facade (rmcp) - sessions - grant checks - audit pipeline         |
 |   capability registry - capabilities() - doctor                        |
 +------------------------------------+-----------------------------------+
@@ -22,14 +22,30 @@ and the only place where traits, DTOs, capability constants, and the error taxon
 +------------------------------------v-----------------------------------+
 | omnibus-adapter-* (subsystem x family) + omnibus-probe                 |
 +------------------------------------------------------------------------+
+| composition root: omnibusd (binary crate) - probe-assembled registry,  |
+|   wiring, grant/doctor CLI; depends on core, contracts, probe, adapters |
++------------------------------------------------------------------------+
 ```
 
-Planned layout (created by roadmap task 1.1.2; no code exists yet):
+Carve-out: the core's deliberate OS access is confined to three files. The
+cross-process write gate — `rustix::fs::flock` plus the lock-file creation
+(`File::create`, `create_dir_all`) in `write_gate.rs`; the audit
+`params_hash` key bootstrap (reading the platform entropy source), the
+per-install key persistence (reading and 0600-writing the key file), and the
+file-fallback JSONL sink (`create_dir_all` plus append, `read_to_string` for
+replay), all via `std::fs` in `audit.rs`; and the grant-store reads plus
+canonical path resolution via `std::fs` (`read_dir`, `read_to_string`,
+`canonicalize`) in `scopes.rs`. No
+native types cross the seam: the write gate hands over an in-crate permit, the
+key never leaves the audit pipeline, and the scopes module deals only in
+absolute path strings, never file handles.
+
+Crate layout (created by roadmap task 1.1.2; realized since MS1):
 
 ```
-omnibus-contracts/    # spi/*.rs, dto/*.rs, tokens.rs, capabilities.rs, errors.rs
-omnibus-core/         # facade/, sessions/, scopes/, audit/, capabilities/, tools/doctor.rs
-omnibus-probe/        # detect.rs, floors.rs
+omnibus-contracts/    # spi/, dto/, suite/, tokens.rs, capabilities.rs, errors.rs, floors.rs, schema.rs, version.rs
+omnibus-core/         # facade.rs, session.rs, scopes.rs, audit.rs, caps.rs, doctor.rs, grants.rs, registry.rs, limits.rs, error_map.rs, ladder.rs, tools/, write_gate.rs
+omnibus-probe/        # detect.rs, floors.rs, manjaro.rs, runner.rs
 omnibus-adapter-*/    # one crate per active subsystem implementation
 ```
 

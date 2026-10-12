@@ -13,6 +13,8 @@ omnibus-contracts = { path = "../omnibus-contracts" }
 async-trait = "0.1"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 serde = { version = "1", features = ["derive"] }
+# Wall-clock budgets around the bus probes (mirrors the atspi adapter).
+tokio = { version = "1", default-features = false, features = ["time"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

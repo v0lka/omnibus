@@ -17,7 +17,7 @@ MCP hosts: Claude Code / goose / Cursor / any MCP client
      |   the "big brain" (LLM) lives entirely in the agent, chosen by the user
      | MCP over stdio; one omnibusd instance per connection (child of the client)
 +------------------------------------------------------------------------+
-| CORE  omnibus-core (crate, binary omnibusd) - OS-agnostic              |
+| CORE  omnibus-core (library crate) - OS-agnostic                       |
 |   MCP facade (rmcp) - sessions (= connections) - grant checks          |
 |   capability registry - capabilities() document - doctor               |
 |   audit pipeline (schema owned here) - global write serialization      |
@@ -41,9 +41,9 @@ MCP hosts: Claude Code / goose / Cursor / any MCP client
 
 ## The Numbers (normative inventory)
 
-- 12 SPI traits across 10 subsystems (see [spi-registry.md](spi-registry.md)).
+- 12 SPI traits across 10 subsystems (11 declared; `AppIntentsBridge` is JIT with MS3 — see [spi-registry.md](spi-registry.md)).
 - 29 MCP tools (see [tool-registry.md](tool-registry.md)).
-- 20 capability constants (see [capability-model.md](capability-model.md)).
+- 20 capability constants (18 shipped; the two `intents.*` arrive with MS3 — see [capability-model.md](capability-model.md)).
 - 8 error codes (see [error-taxonomy.md](error-taxonomy.md)).
 - 3 support tiers, 9 target desktop platforms (see [platform-matrix.md](platform-matrix.md)).
 - 0 model calls, 0 in-band confirmations, 0 consent UI in `omnibusd` (see [security-model.md](security-model.md)).
@@ -54,7 +54,7 @@ MCP hosts: Claude Code / goose / Cursor / any MCP client
 2. The agent calls `capabilities()` - the single machine-readable truth about this machine.
 3. The tool list already reflects reality: tools without their capabilities are hidden.
 4. Reads execute immediately. Writes require a grant the human issued out of band
-   (TOML manifest / `omnibus grant` / doctor CLI). Denied writes return `ScopeDenied`
+   (TOML manifest / `omnibusd grant` / doctor CLI). Denied writes return `ScopeDenied`
    with a one-line copy-paste remedy.
 5. Every call - reads included - produces exactly one structured audit event.
 

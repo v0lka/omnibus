@@ -33,19 +33,25 @@ rules.
 
 - Writes are globally serialized: in-process mutex + cross-process `flock` at
   `XDG_RUNTIME_DIR/omnibus/write.lock` between instances. The application order equals the lock
-  acquisition order; the audit records the factual order.
+  acquisition order; the audit records the factual order. Two bounded exceptions: when the lock
+  file cannot be created, the gate degrades to in-process serialization only (visible in doctor,
+  never silent); and a write that outlives its adapter's write budget releases the gate while the
+  native operation may still complete; the elapse answer is adapter-defined - a payload-bearing
+  indeterminate `NativeFailure` where the adapter can name the possibly-still-running write, a
+  plain `TimeoutError` elsewhere - and the audited event keeps the late outcome correlatable.
 - Reads always run in parallel; no v1 scenario requires parallel writes.
 
 ## Limits and Retries
 
 | Limit | Value | Note |
 |---|---|---|
-| Tool-call budget | 10 s | `desktop.tree` gets 15 s |
+| Tool-call budget | 10 s | bounds reads; `desktop.tree` gets 15 s |
+| Adapter write budgets | 9 s and below | the only timeout layer a write has (see Concurrency Model) |
 | D-Bus operation | 2 s | per call |
 | Retry policy | exactly one auto-retry for idempotent reads; writes never retried | exhaustion produces typed `TimeoutError` |
 
 - Defaults are hardcoded (no config surface until a real request exists); the effective values are
-  always visible in `capabilities()` and doctor.
+  always visible to the agent via the `session_info` tool (`SessionInfo.limits`).
 
 ## Adapter Lifecycle (FSM)
 
@@ -55,9 +61,12 @@ physically cannot be called before `register`. The order of tool calls inside a 
 ## Invariants
 
 - The daemon never outlives its MCP client process.
-- Two write operations always apply in lock acquisition order, with the audit preserving that order.
+- Two write operations always apply in lock acquisition order, with the audit preserving that
+  order - except under the two bounded exceptions above: a degraded process-local gate serializes
+  only within one instance, and a timed-out write releases the gate and may still settle after a
+  later write has applied.
 - A write always executes at most once per call - the core never retries it.
-- Timeout/retry behavior is always observable by the agent via `capabilities()` or doctor.
+- Timeout/retry behavior is always observable by the agent via the audit trail or doctor.
 
 ## Anti-Patterns
 

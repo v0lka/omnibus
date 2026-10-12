@@ -11,9 +11,17 @@ workspace = true
 # Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
 omnibus-contracts = { path = "../omnibus-contracts" }
 async-trait = "0.1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 base64 = "0.22"
 serde_json = "1"
+# open(2) flag constants (O_NOFOLLOW, O_NONBLOCK) for the scope-race guard.
+libc = "0.2"
+# Safe openat/mkdirat for the per-component dirfd walk that closes the
+# decide->open race: libc's raw calls are `unsafe fn`s and the workspace
+# forbids unsafe (`unsafe_code = "forbid"`), so the walk goes through rustix,
+# kept compatible with the version omnibus-core builds against; the exact
+# version is pinned by Cargo.lock.
+rustix = { version = "1.1.5", features = ["fs"] }
 
 [dev-dependencies]
 tempfile = "3"

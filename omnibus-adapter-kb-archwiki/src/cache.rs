@@ -14,16 +14,19 @@ pub fn article_path(cache_dir: &Path, slug: &str) -> PathBuf {
     cache_dir.join(format!("{slug}.{CACHE_SUFFIX}"))
 }
 
-/// Persists one fetched article; a failing write must never fail the read that
-/// produced it, so the outcome is reported but not propagated.
-pub fn store(cache_dir: &Path, article: &KbArticle) -> Result<(), String> {
-    let slug = super::wiki::slugify(&article.title);
+/// Persists one fetched article under the given slug key. The key is the
+/// request-derived slug the offline lookup uses — deliberately not derived
+/// from `article.title` (the canonical title), so a URL naming a redirect is
+/// stored under the same key the same URL later looks up. A failing write
+/// must never fail the read that produced it, so the outcome is reported but
+/// not propagated.
+pub fn store(cache_dir: &Path, slug: &str, article: &KbArticle) -> Result<(), String> {
     if slug.is_empty() {
-        return Err(String::from("article title has no slug"));
+        return Err(String::from("article slug is empty"));
     }
     std::fs::create_dir_all(cache_dir)
         .map_err(|e| format!("cache dir {}: {e}", cache_dir.display()))?;
-    let path = article_path(cache_dir, &slug);
+    let path = article_path(cache_dir, slug);
     let payload =
         serde_json::to_string_pretty(article).map_err(|e| format!("cache serialize: {e}"))?;
     std::fs::write(&path, payload).map_err(|e| format!("cache write {}: {e}", path.display()))
@@ -61,8 +64,8 @@ mod tests {
     fn cache_write_read_roundtrip_preserves_the_article() {
         let dir = tempfile::tempdir().expect("tempdir");
         let article = sample_article("Suspend and Hibernate");
-        store(dir.path(), &article).expect("cache store");
         let slug = super::super::wiki::slugify(&article.title);
+        store(dir.path(), &slug, &article).expect("cache store");
         let loaded = load(dir.path(), &slug).expect("cached article must load");
         assert_eq!(loaded, article);
     }
@@ -71,9 +74,28 @@ mod tests {
     fn load_of_missing_slug_is_none_and_write_failures_are_reported() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(load(dir.path(), "nope").is_none());
-        // A title with no slug-able characters cannot be stored; the error is
-        // a string payload, never a panic.
-        assert!(store(dir.path(), &sample_article("!!!")).is_err());
+        // An empty slug cannot be stored; the error is a string payload,
+        // never a panic.
+        assert!(store(dir.path(), "", &sample_article("Suspend")).is_err());
+    }
+
+    #[test]
+    fn store_keys_by_the_given_slug_not_the_article_title() {
+        // Redirect scenario: the request URL names one title while the stored
+        // article carries the canonical one; store and lookup must agree on
+        // the request-derived key, and no second file under the canonical
+        // slug may appear.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let article = sample_article("pm-utils");
+        store(dir.path(), "pmutils", &article).expect("store under the request slug");
+        assert!(
+            load(dir.path(), "pmutils").is_some(),
+            "request-slug key hits"
+        );
+        assert!(
+            load(dir.path(), "pm-utils").is_none(),
+            "the canonical slug must not gain its own cache entry"
+        );
     }
 
     #[test]

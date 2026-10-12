@@ -9,7 +9,11 @@
 //! Statuses and semver per capability arrive with roadmap task 1.2.3; the constants
 //! below are the closed §7.1 name list.
 
-/// Capability name format: `{domain}.{feature}[.{qualifier}]`, lowercase, dotted.
+/// Capability name format: `{domain}.{feature}[.{qualifier}]`. One canonical
+/// alphabet for every name: dot-separated segments, each starting with a lowercase
+/// ASCII letter and continuing with `[a-z0-9_-]` — no uppercase, no other
+/// characters. The R4-CON predicate in `omnibus-lints` matches exactly this
+/// alphabet.
 pub const CAPABILITY_NAME_FORMAT: &str = "{domain}.{feature}[.{qualifier}]";
 
 pub const DESKTOP_TREE: &str = "desktop.tree";
@@ -66,15 +70,19 @@ pub enum CapabilityStatus {
     OptInRequired,
 }
 
-/// Checks the §7.1 name format: `{domain}.{feature}[.{qualifier}]`, at least two
-/// dot-separated segments, lowercase alphanumeric segments.
+/// Checks the §7.1 name format against the canonical alphabet: `{domain}.`
+/// `{feature}[.{qualifier}]` — at least two dot-separated segments, each starting
+/// with a lowercase ASCII letter and continuing with `[a-z0-9_-]`. This is the
+/// same alphabet the R4-CON predicate in `omnibus-lints` matches; the predicate
+/// additionally fixes the first segment to a registry domain.
 pub fn is_valid_capability_name(name: &str) -> bool {
     let segments: Vec<&str> = name.split('.').collect();
     segments.len() >= 2
         && segments.iter().all(|s| {
             !s.is_empty()
+                && s.chars().next().is_some_and(|c| c.is_ascii_lowercase())
                 && s.chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
         })
 }
 
@@ -105,5 +113,18 @@ mod tests {
         assert!(!is_valid_capability_name("Desktop.tree"));
         assert!(!is_valid_capability_name(""));
         assert!(is_valid_capability_name("desktop.write.typed"));
+    }
+
+    /// The canonical alphabet: a segment must START with a lowercase letter
+    /// and may continue with `[a-z0-9_-]` — the exact alphabet the R4-CON
+    /// predicate matches (a digit-leading name must not slip past here while
+    /// the lint's alphabet rejects it, or the drift guard has a seam).
+    #[test]
+    fn name_format_matches_the_documented_alphabet_exactly() {
+        assert!(is_valid_capability_name("net.wifi-scan"));
+        assert!(is_valid_capability_name("journal.prev_boot"));
+        assert!(!is_valid_capability_name("net.9p_mount"));
+        assert!(!is_valid_capability_name("net.-wifi"));
+        assert!(!is_valid_capability_name("net.wifi scan"));
     }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke demo №1 «Диагноз за минуту» / "Diagnosis in a minute" (roadmap 1.8.2).
+# Smoke demo 1 — "Diagnosis in a minute" (roadmap 1.8.2).
 #
 # journal_query(boot=previous) -> doctor -> wiki_search("failed suspend"),
 # then the honest-refusal leg: svc_start without a grant must be refused

@@ -12,7 +12,7 @@ use omnibus_contracts::capabilities as cap;
 use omnibus_contracts::dto::audit::AuditEvent;
 use omnibus_contracts::errors::ContractError;
 use omnibus_contracts::spi::audit_sink::AuditSink;
-use omnibus_core::audit::{AuditPipeline, FileSink, params_hash};
+use omnibus_core::audit::{AuditPipeline, FileSink};
 use omnibus_core::grants::GrantRegistry;
 use omnibus_core::registry::Registry;
 use omnibus_core::scopes::ScopeManifests;
@@ -95,7 +95,9 @@ async fn exactly_one_full_schema_event_per_dispatch() {
         assert_eq!(event.actor.client_name.as_deref(), Some("integration-test"));
         assert_eq!(
             event.params_hash,
-            params_hash(&serde_json::Value::Object(arguments.clone()))
+            core.audit
+                .hash_params(&serde_json::Value::Object(arguments.clone())),
+            "the event stores the keyed hash of the arguments"
         );
         assert_eq!(event.result, "ok");
         assert_eq!(event.scope_ref, None);
@@ -161,10 +163,44 @@ async fn params_hash_never_carries_raw_parameters() {
         );
         assert_eq!(
             event.params_hash,
-            params_hash(&serde_json::Value::Object(arguments.clone())),
-            "the event stores the hash of the arguments"
+            core.audit
+                .hash_params(&serde_json::Value::Object(arguments.clone())),
+            "the event stores the keyed hash of the arguments"
         );
     }
+}
+
+/// audit.md: parameters are never reversibly *restorable*. A candidate list of
+/// low-entropy arguments (package names, unit names) hashed with the unkeyed
+/// construction would leak exactly which one was used; the per-install key
+/// stands between the journal and the parameters — two installs with distinct
+/// state directories produce distinct digests for the same arguments, while one
+/// install stays stable across its sessions.
+#[tokio::test]
+async fn params_hash_is_keyed_per_install() {
+    let first = tempfile::tempdir().expect("tempdir");
+    let second = tempfile::tempdir().expect("tempdir");
+    let mk = |dir: &std::path::Path, seed: u8| {
+        let session = common::session(seed);
+        AuditPipeline::new(
+            session.id.as_str().to_string(),
+            session.actor.clone(),
+            None,
+            dir.join("audit.jsonl"),
+        )
+    };
+    let arguments = serde_json::json!({ "name": "ripgrep" });
+    let install_one_session_a = mk(first.path(), 1).hash_params(&arguments);
+    let install_one_session_b = mk(first.path(), 2).hash_params(&arguments);
+    let install_two = mk(second.path(), 3).hash_params(&arguments);
+    assert_eq!(
+        install_one_session_a, install_one_session_b,
+        "one install, one key: stable across sessions"
+    );
+    assert_ne!(
+        install_one_session_a, install_two,
+        "distinct installs cannot be dictionary-attacked jointly"
+    );
 }
 
 /// AC 1.3.4: a failing (or absent) audit sink never fails the tool call — the

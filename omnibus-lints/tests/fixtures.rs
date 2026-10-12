@@ -9,7 +9,8 @@
 use std::path::{Path, PathBuf};
 
 use omnibus_lints::{
-    Finding, RULE_CON, RULE_COP, RULE_EDGES, RULE_NATIVE, lint_con, lint_cop, lint_native, run_all,
+    CAPABILITY_DOMAINS, Finding, RULE_CON, RULE_COP, RULE_EDGES, RULE_NATIVE, lint_con, lint_cop,
+    lint_native, run_all,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -91,14 +92,77 @@ fn con_allows_the_literal_inside_the_registry() {
 }
 
 #[test]
+fn con_scans_the_composition_root() {
+    // bad_con plants "files.scope.write" in omnibusd/src: the scan list must
+    // cover the daemon crate, not only contracts/core/probe/lints/adapters.
+    let findings = lint_con(&fixture("bad_con"));
+    assert!(
+        findings.iter().any(|f| f.path.contains("omnibusd/src")),
+        "omnibusd sources must be scanned for capability literals: {findings:?}"
+    );
+}
+
+#[test]
 fn forbidden_dependency_edges_are_red() {
     let findings = run_all(&fixture("bad_edges"));
     assert!(
         only_rule(&findings, RULE_EDGES),
         "expected exactly R4-EDGES findings, got: {findings:?}"
     );
-    // adapter -> core and adapter -> adapter are the two forbidden edges here.
+    // adapter -> core, adapter -> adapter and composition root -> lint tool
+    // are the forbidden edges here.
     let messages: Vec<&str> = findings.iter().map(|f| f.message.as_str()).collect();
     assert!(messages.iter().any(|m| m.contains("omnibus-core")));
     assert!(messages.iter().any(|m| m.contains("omnibus-adapter-b")));
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("composition root") && m.contains("omnibus-lints")),
+        "the composition root must not link the lint tool: {findings:?}"
+    );
+}
+
+#[test]
+fn con_domain_list_covers_every_registry_domain() {
+    // Drift guard: the R4-CON predicate fixes the first segment of a
+    // capability-shaped literal to a CAPABILITY_DOMAINS entry, so every domain in
+    // the registry must be on that list — a new capability domain added to
+    // omnibus-contracts/src/capabilities.rs without extending the lint fails here.
+    let registry =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../omnibus-contracts/src/capabilities.rs");
+    let text = std::fs::read_to_string(&registry)
+        .unwrap_or_else(|e| panic!("cannot read the capability registry: {e}"));
+    let mut domains = std::collections::BTreeSet::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("pub const ") else {
+            continue;
+        };
+        // `pub const NAME: &str = "value";` — `ALL` (an array) does not match.
+        let Some((_name, tail)) = rest.split_once(": &str = \"") else {
+            continue;
+        };
+        let Some(value) = tail.split('"').next() else {
+            continue;
+        };
+        // The CAPABILITY_NAME_FORMAT template (`{domain}.{feature}...`) is a doc
+        // placeholder, not a capability name; real names never contain braces.
+        if value.contains('{') {
+            continue;
+        }
+        let Some(domain) = value.split('.').next() else {
+            continue;
+        };
+        domains.insert(domain.to_string());
+    }
+    assert!(
+        !domains.is_empty(),
+        "the registry scan must extract capability constants, got none"
+    );
+    for domain in &domains {
+        assert!(
+            CAPABILITY_DOMAINS.contains(&domain.as_str()),
+            "capability domain `{domain}` exists in the registry but is missing \
+             from omnibus_lints::CAPABILITY_DOMAINS"
+        );
+    }
 }

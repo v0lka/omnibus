@@ -19,8 +19,10 @@ crate::dto!(
 ///
 /// Declared by hand instead of the `dto!` macro: the struct is recursive
 /// (`children`), and an eager recursive schema construction would not terminate.
-/// The schema breaks the cycle by describing nested children as shape-open — the
-/// wire format is unchanged (serde nests fully).
+/// The schema breaks the cycle by describing nested children as free-form
+/// ([`crate::schema::SchemaNode::Any`], rendered as `{}`) — genuinely shape-open:
+/// the rendered schema accepts any child array. The wire format is unchanged
+/// (serde nests A11yNodes fully).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct A11yNode {
     pub node_ref: String,
@@ -52,12 +54,10 @@ impl crate::schema::DtoSchema for A11yNode {
                     doc: "",
                 },
                 Field {
-                    // Recursion break: nested children stay shape-open in the schema.
+                    // Recursion break: nested children stay shape-open in the
+                    // schema — Any renders as `{}`, accepting every real child.
                     name: "children",
-                    node: SchemaNode::Array(Box::new(SchemaNode::Object(Box::new(StructSchema {
-                        name: "A11yNode",
-                        fields: vec![],
-                    })))),
+                    node: SchemaNode::Array(Box::new(SchemaNode::Any)),
                     doc: "",
                 },
             ],

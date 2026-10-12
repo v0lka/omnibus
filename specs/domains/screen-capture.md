@@ -8,8 +8,8 @@ gate, while macOS is gated by TCC Screen Recording.
 
 ## Key Files
 
-- `omnibus-contracts/src/spi/` (planned) - `ScreenCapture` trait and the `portal.screenshot` constant (roadmap task 1.2.1).
-- `omnibus-adapter-xdg-portals/src/` (planned) - Linux provider: `screenshot` (portal/X11) (task 1.5.5).
+- `omnibus-contracts/src/spi/portals.rs` - the `ScreenCapture` trait; the `portal.screenshot` constant in `omnibus-contracts/src/capabilities.rs` (roadmap task 1.2.1).
+- `omnibus-adapter-xdg-portals/src/lib.rs` - Linux provider: `screenshot` (portal) (task 1.5.5).
 - `omnibus-adapter-screencapture/src/` (planned) - macOS provider on ScreenCaptureKit, MS3 (task 3.5.1).
 
 ## Capability and Tools
@@ -19,8 +19,9 @@ gate, while macOS is gated by TCC Screen Recording.
 | `screenshot` | `portal.screenshot` | none (read-only) | `ScreenCapture::screenshot` |
 
 `screenshot` never requires a scope grant: it is a read. The `portal.screenshot` capability is
-declared by the probe per detected backend (auto-detection is part of the probe report); without a
-backend the tool is hidden.
+declared by the probe per detected backend; with a session bus but an unpublished Screenshot
+interface the capability reports `degraded` and the tool stays visible; without a session bus
+(no portals adapter at all) the tool is hidden.
 
 ## Behavior
 
@@ -45,8 +46,8 @@ agent --> screenshot ----------> core --> ScreenCapture::screenshot --> provider
 
 | Ladder state | This domain |
 | --- | --- |
-| Degraded | Not observed in the sources: capture is either present or hidden. |
-| Missing capability | No backend detected (no portal interfaces, no ScreenCaptureKit): `screenshot` hidden from `tools/list`; a direct call returns `CapabilityRequired` with a doctor hint. |
+| Degraded | With the portal service present (the adapter exists): the portal Screenshot interface is not published on this machine — the fact reports `degraded` with the reason, the tool stays visible with the limitation marked, and calls answer `AdapterUnavailable`. |
+| Missing capability | The portals adapter is absent this session — no session bus, or the probe found no portal service: capabilities absent, tools hidden from `tools/list` (`CapabilityRequired` with a doctor hint). On macOS an absent ScreenCaptureKit backend is the opt-in state below. |
 | Below version floor | Portal interfaces below the `xdg-desktop-portal` floor deactivate the adapter; `capabilities()` explains the reason. |
 | Opt-in required | macOS: Screen Recording not granted (or expired/revoked) - status `opt-in-required`; the tool stays hidden until the human issues the grant via TCC; doctor explains the monthly re-grant. |
 
@@ -60,7 +61,9 @@ documented posture, not a ladder state.
 - The Wayland DE portal is never treated as part of the Omnibus contract.
 - macOS Screen Recording is always issued by a human through GUI or MDM/PPPC; no adapter or doctor
   flow ever attempts programmatic TCC.
-- A missing backend always hides the tool instead of failing at call time.
+- An absent portal adapter hides the tool; an unpublished Screenshot interface keeps it visible,
+  answering `AdapterUnavailable`; macOS without the TCC grant is the opt-in state, never a
+  call-time surprise.
 
 ## Related Specs
 

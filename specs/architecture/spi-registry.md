@@ -13,10 +13,10 @@ are declared just-in-time together with their first implementation (`NetworkStat
 | # | Subsystem | Trait(s) | Key contract operations | Linux provider | macOS provider |
 |---|-----------|----------|-------------------------|----------------|----------------|
 | 1 | a11y / desktop | `DesktopA11y` | `tree(app)`, `element(id)`, `read_attr`, `set_value`, `invoke` | `atspi` (AT-SPI2 over D-Bus) | `ax` (NSAccessibility / AXUIElement) |
-| 2 | journaling + audit sink | `Journal`, `AuditSink` | `query(Filter{unit, boot, severity, window})`, `tail`, `write(AuditEvent)` | `journald` (persistence is distro-dependent) | `unifiedlog` (`log show --predicate`) |
-| 3 | service management | `ServiceManager` | `list`, `status`, `start/stop/restart`, `enable/disable` | `systemd1` | `launchd` (LaunchAgents - only agents see GUI) |
+| 2 | journaling + audit sink | `Journal`, `AuditSink` | `query(JournalQuery{unit, boot, severity_at_least, since/until epoch window, limit})`, `tail`, `write(AuditEvent)` | `journald` (persistence is a per-machine probe fact; distro defaults are persistent — M0 Table 1) | `unifiedlog` (`log show --predicate`) |
+| 3 | service management | `ServiceManager` | `list`, `status`, `apply` (action `start/stop/restart/enable/disable`) | `systemd1` | `launchd` (LaunchAgents - only agents see GUI) |
 | 4 | package management | `PackageManager` | `list`, `info`, `search`, `install`, `remove`, `history`, `undo` | `alpm` / `apt` (no undo) / `dnf` (transactional undo) | `brew` (+ `mas` optional) |
-| 5 | portals | `ScreenCapture`, `Notify` | `screenshot`, `clip_read`/`clip_write`, `notify` | xdg-desktop-portal + wl-clipboard/xclip | ScreenCaptureKit (monthly re-grant on 15+), UNUserNotificationCenter |
+| 5 | portals | `ScreenCapture`, `Notify` | `screenshot`, `clip_read`/`clip_write`, `send` | xdg-desktop-portal (wl-clipboard/xclip: planned, not shipped) | ScreenCaptureKit (monthly re-grant on 15+), UNUserNotificationCenter |
 | 6 | file scopes | `FileScope` | `list/read/write` in granted scopes, `resolve` | `fs-xdg` (XDG dirs) | `fs-tcc` (granted folders; beyond - Full Disk Access) |
 | 7 | knowledge base | `KnowledgeBase` | `search`, `page` | `kb-archwiki` (ArchWiki + Manjaro overlay), `kb-guides` (distro docs) | `kb-guides` (Apple Support, SS64, community) |
 | 8 | platform probe | `PlatformProbe` | `detect() -> PlatformReport{distro/release, versions, daemon liveness}` | `/etc/os-release`, `systemctl --version`, bus state | `sw_vers`, system profiles, TCC state |
@@ -32,7 +32,7 @@ are declared just-in-time together with their first implementation (`NetworkStat
 ## Addressing Semantics
 
 - `tree(app)`: selector `app` = executable basename (exact, case-insensitive) plus optional `pid`
-  for disambiguation. Multiple matches produce a typed error listing candidates (role+name+pid).
+  for disambiguation. Multiple matches produce a typed error listing candidates (name+pid).
 - A stale `element_id` (UI changed) produces typed `ElementStale`; there is no auto-re resolution -
   the agent re-reads `tree`.
 

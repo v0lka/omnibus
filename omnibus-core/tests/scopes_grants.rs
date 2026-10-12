@@ -112,7 +112,7 @@ async fn consent_fields_are_ignored_when_the_grant_exists() {
 
 /// AC 1.3.3: manifest grants carry provenance `config` (the single grant store);
 /// doctor reports a granted opt-in as satisfied and a missing one with a
-/// copy-paste `omnibus grant` remedy.
+/// copy-paste `omnibusd grant` remedy.
 #[tokio::test]
 async fn manifest_grants_drive_the_doctor_opt_in_findings() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -137,7 +137,7 @@ async fn manifest_grants_drive_the_doctor_opt_in_findings() {
             "opt-in-required",
             Some(serde_json::json!(false)),
             None,
-            Some(format!("omnibus grant {}", cap::JOURNAL_PERSISTENT)),
+            Some(format!("omnibusd grant {}", cap::JOURNAL_PERSISTENT)),
         ),
     ];
     let core = build_core(
@@ -188,7 +188,7 @@ async fn manifest_grants_drive_the_doctor_opt_in_findings() {
         .find(|f| f.component == "grant" && f.detail.contains(cap::JOURNAL_PERSISTENT))
         .expect("missing opt-in produces a grant finding");
     let remedy = finding.remedy.as_deref().expect("remedy present");
-    assert!(remedy.contains("omnibus grant"));
+    assert!(remedy.contains("omnibusd grant"));
 }
 
 /// AC 1.3.3: a malformed manifest never takes the daemon down — exactly one
@@ -233,6 +233,18 @@ async fn broken_manifest_is_recorded_and_healthy_scopes_keep_working() {
         .entry(cap::PKG_WRITE)
         .expect("capability document entry");
     assert_eq!(entry.status, "present");
+
+    // The error channel is read by doctor: the broken manifest is named, with a
+    // remedy pointing at the file — instead of the grant silently disappearing.
+    let report = doctor::diagnose(&core).await;
+    let manifest = report
+        .findings
+        .iter()
+        .find(|f| f.component == "grants")
+        .expect("the broken manifest surfaces as a doctor finding");
+    assert!(manifest.detail.contains("10-bad.toml"));
+    let remedy = manifest.remedy.as_deref().expect("remedy present");
+    assert!(remedy.contains("10-bad.toml"), "the remedy names the file");
 }
 
 /// AC 1.3.3: the default install (no manifests) exposes exactly the read-only
@@ -302,4 +314,229 @@ async fn default_install_is_read_only() {
             "read tool {expected} must be visible"
         );
     }
+}
+
+fn files_report() -> Vec<omnibus_contracts::dto::probe::CapabilityFact> {
+    vec![
+        common::fact(cap::FILES_SCOPE_READ, "present"),
+        common::fact(cap::FILES_SCOPE_WRITE, "present"),
+    ]
+}
+
+/// A files write grant on a directory must not authorize the directory's
+/// siblings, and a `..`-containing path is scope-checked on its normalized
+/// form — a new-file write is never approved on a raw un-normalized string,
+/// and the out-of-scope refusal is audited (R5: a refused call is a call).
+#[tokio::test]
+async fn traversal_and_sibling_writes_are_denied_and_audited() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scope_root = dir.path().join("Projects");
+    std::fs::create_dir_all(&scope_root).expect("mkdir scope root");
+
+    let mut manifests = ScopeManifests::default();
+    manifests.write.insert(
+        cap::FILES_SCOPE_WRITE.to_string(),
+        vec![scope_root.display().to_string()],
+    );
+    let (grants, manifests) = manifests.into_grant_registry();
+    let core = build_core(
+        Registry {
+            files: Some(common::FakeFiles::new(files_report())),
+            ..Registry::default()
+        },
+        grants,
+        manifests,
+        pipeline_for(&common::session(8), &dir.path().join("audit.jsonl")),
+        platform(vec![met_floor("systemd", "261")]),
+        8,
+    );
+
+    // Traversal: the granted prefix literal-matches, the resolved target
+    // (nearest existing ancestor, `..` collapsed) sits outside the scope.
+    let escape = format!("{}/../../escape.txt", scope_root.display());
+    let outcome = tools::dispatch(
+        &core,
+        "fs_write",
+        args(&[("path", escape.into()), ("text", "pwn".into())]),
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(ContractError::ScopeDenied)),
+        "a ..-laden new-file write must not pass the scope check"
+    );
+
+    // Sibling: /…/Projects-backup extends the granted string but is not inside
+    // the granted components.
+    let sibling = dir.path().join("Projects-backup").join("x.txt");
+    let outcome = tools::dispatch(
+        &core,
+        "fs_write",
+        args(&[("path", sibling.display().to_string().into())]),
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(ContractError::ScopeDenied)),
+        "a sibling directory is not inside the granted scope"
+    );
+
+    // Both refusals are audited, exactly once each, with the denial reason.
+    let events = FileSink::new(dir.path().join("audit.jsonl")).read_all();
+    assert_eq!(events.len(), 2, "every refused write leaves an audit event");
+    assert!(events.iter().all(|e| e.result == "ScopeDenied"));
+    assert!(events.iter().all(|e| e.tool == "fs_write"));
+    assert!(events.iter().all(|e| e.adapter == "core"));
+}
+
+/// The granted scope keeps working end to end, and every event under the grant
+/// carries its provenance in `scope_ref` (audit.md: config|cli|doctor).
+#[tokio::test]
+async fn in_scope_write_is_allowed_and_audited_with_grant_provenance() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scope_root = dir.path().join("Projects");
+    std::fs::create_dir_all(&scope_root).expect("mkdir scope root");
+
+    let mut manifests = ScopeManifests::default();
+    manifests.write.insert(
+        cap::FILES_SCOPE_WRITE.to_string(),
+        vec![scope_root.display().to_string()],
+    );
+    let (grants, manifests) = manifests.into_grant_registry();
+    let core = build_core(
+        Registry {
+            files: Some(common::FakeFiles::new(files_report())),
+            ..Registry::default()
+        },
+        grants,
+        manifests,
+        pipeline_for(&common::session(9), &dir.path().join("audit.jsonl")),
+        platform(vec![met_floor("systemd", "261")]),
+        9,
+    );
+
+    let inside = scope_root.join("notes.txt").display().to_string();
+    let outcome = tools::dispatch(
+        &core,
+        "fs_write",
+        args(&[("path", inside.clone().into()), ("text", "hi".into())]),
+    )
+    .await;
+    assert!(outcome.is_ok(), "the granted scope works end to end");
+
+    let outside = dir.path().join("elsewhere.txt").display().to_string();
+    let outcome = tools::dispatch(
+        &core,
+        "fs_write",
+        args(&[("path", outside.into()), ("text", "hi".into())]),
+    )
+    .await;
+    assert!(matches!(outcome, Err(ContractError::ScopeDenied)));
+
+    let events = FileSink::new(dir.path().join("audit.jsonl")).read_all();
+    assert_eq!(events.len(), 2);
+    let provenance = format!("config:{}", cap::FILES_SCOPE_WRITE);
+    assert_eq!(
+        events[0].scope_ref.as_deref(),
+        Some(provenance.as_str()),
+        "the successful write carries the grant's provenance"
+    );
+    assert_eq!(
+        events[1].scope_ref.as_deref(),
+        Some(provenance.as_str()),
+        "the refused write names the grant it was checked against"
+    );
+    assert_eq!(events[1].result, "ScopeDenied");
+}
+
+/// Reads are scope-enforced core-side (files.md: default read scope = $HOME):
+/// inside the read root the tool runs, outside it answers `ScopeDenied` with
+/// the refusal audited from the `core` adapter.
+#[tokio::test]
+async fn reads_outside_the_default_read_scope_are_denied_and_audited() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifests = ScopeManifests {
+        read_roots: vec![dir.path().display().to_string()],
+        ..Default::default()
+    };
+    let core = build_core(
+        Registry {
+            files: Some(common::FakeFiles::new(files_report())),
+            ..Registry::default()
+        },
+        GrantRegistry::new(),
+        manifests,
+        pipeline_for(&common::session(10), &dir.path().join("audit.jsonl")),
+        platform(vec![]),
+        10,
+    );
+
+    let inside = dir.path().join("notes.txt").display().to_string();
+    let outcome = tools::dispatch(&core, "fs_read", args(&[("path", inside.into())])).await;
+    assert!(outcome.is_ok(), "a read inside the read root runs");
+
+    let outcome = tools::dispatch(&core, "fs_read", args(&[("path", "/etc/passwd".into())])).await;
+    assert!(
+        matches!(outcome, Err(ContractError::ScopeDenied)),
+        "a read outside the read root is refused core-side"
+    );
+    let outcome = tools::dispatch(&core, "fs_list", args(&[("path", "/etc".into())])).await;
+    assert!(matches!(outcome, Err(ContractError::ScopeDenied)));
+
+    let events = FileSink::new(dir.path().join("audit.jsonl")).read_all();
+    assert_eq!(events.len(), 3, "reads included: one event per call");
+    assert_eq!(events[0].result, "ok");
+    assert_eq!(events[1].result, "ScopeDenied");
+    assert_eq!(events[1].adapter, "core", "the adapter was never reached");
+    assert_eq!(events[2].result, "ScopeDenied");
+}
+
+/// A call that omits or empties its `path` argument violates the tool schema:
+/// it answers `Unsupported` (a grant cannot repair an argument the call never
+/// carried), not `ScopeDenied`, and the refusal is audited under `core` with
+/// the schema-error code.
+#[tokio::test]
+async fn fs_calls_without_a_path_argument_are_schema_errors_not_scope_denials() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut manifests = ScopeManifests {
+        read_roots: vec![dir.path().display().to_string()],
+        ..Default::default()
+    };
+    manifests.write.insert(
+        cap::FILES_SCOPE_WRITE.to_string(),
+        vec![dir.path().display().to_string()],
+    );
+    let (grants, manifests) = manifests.into_grant_registry();
+    let core = build_core(
+        Registry {
+            files: Some(common::FakeFiles::new(files_report())),
+            ..Registry::default()
+        },
+        grants,
+        manifests,
+        pipeline_for(&common::session(10), &dir.path().join("audit.jsonl")),
+        platform(vec![]),
+        10,
+    );
+
+    for tool in ["fs_read", "fs_list"] {
+        let outcome = tools::dispatch(&core, tool, args(&[])).await;
+        assert!(
+            matches!(outcome, Err(ContractError::Unsupported { .. })),
+            "{tool} without a path answers the schema error"
+        );
+        let outcome = tools::dispatch(&core, tool, args(&[("path", "".into())])).await;
+        assert!(
+            matches!(outcome, Err(ContractError::Unsupported { .. })),
+            "{tool} with an empty path answers the schema error"
+        );
+    }
+    let outcome = tools::dispatch(&core, "fs_write", args(&[])).await;
+    assert!(
+        matches!(outcome, Err(ContractError::Unsupported { .. })),
+        "fs_write without a path answers the schema error"
+    );
+
+    let events = FileSink::new(dir.path().join("audit.jsonl")).read_all();
+    assert_eq!(events.len(), 5, "every refused call is audited");
+    assert!(events.iter().all(|e| e.result == "Unsupported"));
+    assert!(events.iter().all(|e| e.adapter == "core"));
 }

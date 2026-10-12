@@ -8,6 +8,10 @@ crate::dto!(
         pub description: String,
         pub active_state: String,
         pub sub_state: String,
+        /// Unit-file enablement tri-state: `Some(true)` enabled,
+        /// `Some(false)` disabled, `None` when the unit-file state does not
+        /// decide enablement (static, masked, indirect, generated, transient,
+        /// linked) — `None` is an honest "not decidable", never "disabled".
         pub enabled: Option<bool>,
     }
 );

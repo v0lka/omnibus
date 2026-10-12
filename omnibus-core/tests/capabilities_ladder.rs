@@ -13,7 +13,7 @@ use omnibus_contracts::dto::probe::FloorStatus;
 use omnibus_contracts::errors::ContractError;
 use omnibus_contracts::floors::{PlatformVersion, SYSTEMD_FLOOR, floor_reason};
 use omnibus_core::doctor;
-use omnibus_core::error_map::{capability_for_tool, render};
+use omnibus_core::error_map::{capability_for_tool, render_for_tool};
 use omnibus_core::grants::{Grant, GrantProvenance, GrantRegistry};
 use omnibus_core::registry::Registry;
 use omnibus_core::scopes::ScopeManifests;
@@ -108,9 +108,10 @@ async fn absent_capability_hides_the_tool_and_hints_the_doctor() {
     let outcome = tools::dispatch(&core, "svc_list", args(&[])).await;
     assert!(matches!(outcome, Err(ContractError::CapabilityRequired)));
 
-    let rendered = render(
+    let rendered = render_for_tool(
         &ContractError::CapabilityRequired,
         capability_for_tool("svc_list"),
+        "svc_list",
     );
     assert!(
         rendered.contains("doctor"),
@@ -194,7 +195,7 @@ async fn opt_in_ungranted_is_hidden_and_granted_is_runnable() {
             "opt-in-required",
             None,
             None,
-            Some(format!("omnibus grant {}", cap::PKG_WRITE)),
+            Some(format!("omnibusd grant {}", cap::PKG_WRITE)),
         ),
     ];
     let mk = |grants: GrantRegistry, session_num: u8, path: &std::path::Path| {
@@ -292,4 +293,55 @@ async fn fresh_session_picks_up_the_new_grant_manifests() {
     // Unchanged read surface survives the new session untouched.
     assert!(before_names.contains(&"pkg_list".to_string()));
     assert!(after_names.contains(&"pkg_list".to_string()));
+}
+
+/// The systemd floor gates only the services tools: journal and package reads
+/// stay runnable below the floor (platform-matrix.md keeps them in the T3
+/// row), so the capabilities document and the gate cannot disagree.
+#[tokio::test]
+async fn below_floor_systemd_hides_only_the_services_tools() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = build_core(
+        Registry {
+            journal: Some(FakeJournal::new(vec![common::fact(
+                cap::JOURNAL_QUERY,
+                "present",
+            )])),
+            packages: Some(FakePackages::new(
+                vec![common::fact(cap::PKG_READ, "present")],
+                std::time::Duration::ZERO,
+            )),
+            services: Some(FakeServices::new(vec![common::fact(
+                cap::SERVICE_READ,
+                "present",
+            )])),
+            ..Registry::default()
+        },
+        GrantRegistry::new(),
+        ScopeManifests::default(),
+        common::pipeline_for(&common::session(8), &dir.path().join("audit.jsonl")),
+        platform(below_floor_systemd()),
+        8,
+    );
+
+    assert!(
+        matches!(tools::gate(&core, "journal_query"), GateDecision::Run),
+        "journal reads are not floor-gated on the systemd component"
+    );
+    assert!(
+        matches!(tools::gate(&core, "pkg_list"), GateDecision::Run),
+        "package reads are not floor-gated at all"
+    );
+    assert!(
+        matches!(tools::gate(&core, "svc_list"), GateDecision::BelowFloor),
+        "the services tools keep their systemd floor"
+    );
+
+    let journal = tools::dispatch(&core, "journal_query", args(&[("limit", 1.into())])).await;
+    assert!(
+        journal.is_ok(),
+        "journal_query runs below the systemd floor"
+    );
+    let svc = tools::dispatch(&core, "svc_list", args(&[])).await;
+    assert!(matches!(svc, Err(ContractError::FloorUnsupported)));
 }

@@ -13,7 +13,7 @@ spec fixes the format, the registry, detection levels, and the degradation ladde
 contracts. Registry constants live in `omnibus-contracts`; name literals elsewhere in code are
 forbidden (CI lint).
 
-## Registry (20 constants)
+## Registry (20 constants; 18 shipped, +2 with MS3)
 
 | Domain | Constants |
 |---|---|
@@ -40,10 +40,12 @@ forbidden (CI lint).
 { "capabilities": [
   { "name": "pkg.undo",          "ver": "1.0.0", "status": "present",
     "value": "cache-downgrade",  "adapter": "alpm" },
-  { "name": "journal.prev_boot", "ver": "1.0.0", "status": "present",
-    "value": false,              "adapter": "journald", "note": "volatile: current boot only" },
+  { "name": "journal.prev_boot", "ver": "1.0.0", "status": "opt-in-required",
+    "value": false,              "adapter": "journald",
+    "note": "the journal is volatile; past boots appear after persistent storage is granted",
+    "remedy": "omnibusd grant journal.persistent" },
   { "name": "journal.persistent","ver": "1.0.0", "status": "opt-in-required",
-    "adapter": "journald",       "remedy": "omnibus grant journal.persistent" } ] }
+    "adapter": "journald",       "remedy": "omnibusd grant journal.persistent" } ] }
 ```
 
 - `ver` - semver of the capability contract; `value` - typed value for polymorphic capabilities;
@@ -57,7 +59,7 @@ forbidden (CI lint).
 2. Missing capability - tool hidden from `tools/list`; a direct call returns `CapabilityRequired`
    with a doctor hint.
 3. Below version floor - the adapter is not activated at all; `capabilities()` explains the reason
-   (example: "systemd 247 < 252").
+   (example: "systemd 247.3 < 252.0").
 4. Grant not issued (TCC-style) - capability status `opt-in-required`; doctor walks the human through
    issuance; until then behavior equals state 2.
 
@@ -70,8 +72,10 @@ boots exist in the journal) are independent: a freshly persistent machine withou
 ## Tier vs Capabilities
 
 A tier is a promise-and-testing category; `capabilities()` is machine truth. They may diverge
-(example: volatile-by-default Ubuntu LTS reports `journal.persistent` as `opt-in-required` and hides
-`journal.prev_boot` until the doctor opt-in, although its tier promises full reading);
+(example: a machine with a volatile-configured journald reports `journal.persistent` as
+`opt-in-required` and keeps `journal.prev_boot` under the ladder until the doctor-led opt-in
+completes — the grant plus the manual persistent-storage creation and a reboot; see journal.md —
+although its tier promises full reading);
 `capabilities()` always wins a dispute.
 
 ## Invariants

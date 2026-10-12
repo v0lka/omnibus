@@ -13,29 +13,18 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, ServiceExt};
 
 use crate::Core;
-use crate::error_map::render;
+use crate::error_map::render_for_tool;
 
 /// The facade state: the wired core plus the client name captured at initialize.
 pub struct OmnibusHandler {
     core: Arc<Core>,
-    client_name: std::sync::OnceLock<String>,
 }
 
 impl OmnibusHandler {
     pub fn new(core: Core) -> Self {
         Self {
             core: Arc::new(core),
-            client_name: std::sync::OnceLock::new(),
         }
-    }
-
-    /// The captured MCP client identity (audit `actor` correlation); falls back
-    /// to a stable placeholder when initialize never carried a name.
-    pub fn actor_name(&self) -> String {
-        self.client_name
-            .get()
-            .cloned()
-            .unwrap_or_else(|| String::from("mcp-client"))
     }
 
     /// Serves one stdio session to completion (the daemon dies with the client
@@ -58,7 +47,7 @@ impl OmnibusHandler {
 /// code name plus the doctor/grant remedy, visible to the calling agent.
 fn error_text(error: &omnibus_contracts::errors::ContractError, tool: &str) -> String {
     let capability = crate::error_map::capability_for_tool(tool);
-    render(error, capability)
+    render_for_tool(error, capability, tool)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -86,8 +75,10 @@ impl ServerHandler for OmnibusHandler {
         request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
-        // Actor capture (audit correlation): client name from MCP initialize.
-        let _ = self.client_name.set(request.client_info.name.clone());
+        // Actor capture (audit correlation): the client name from MCP initialize
+        // reaches every subsequent audit event (audit.md actor model).
+        let name = request.client_info.name.clone();
+        self.core.audit.set_client_name(name);
         context.peer.set_peer_info(request.clone());
         self.negotiate_initialize(&request)
     }
@@ -125,7 +116,8 @@ impl ServerHandler for OmnibusHandler {
         let result = match crate::tools::dispatch(&self.core, &request.name, arguments).await {
             Ok(outcome) => {
                 // A degraded audit sink never fails the tool call; the degradation
-                // is visible through capabilities()/doctor (audit.md).
+                // is visible in doctor (audit.md: sink-health findings), never in
+                // the startup capabilities document.
                 let json = serde_json::to_string_pretty(&outcome.value)
                     .unwrap_or_else(|_| String::from("null"));
                 CallToolResult::success(vec![ContentBlock::text(json)])
@@ -151,7 +143,7 @@ mod tests {
             "pkg_install",
         );
         assert!(text.contains("ScopeDenied"));
-        assert!(text.contains("omnibus grant"));
+        assert!(text.contains("omnibusd grant"));
 
         let hidden = error_text(
             &omnibus_contracts::errors::ContractError::CapabilityRequired,

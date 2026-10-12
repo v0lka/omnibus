@@ -25,7 +25,14 @@ impl CommandRunner for SystemRunner {
     async fn run(&self, prog: &str, args: &[&str]) -> Option<String> {
         let output = tokio::time::timeout(
             std::time::Duration::from_millis(COMMAND_BUDGET_MS),
-            tokio::process::Command::new(prog).args(args).output(),
+            // kill_on_drop(true): when the budget fires the output future is
+            // dropped and the child must die with it — without this a wedged
+            // backend binary survives every probe (same defect class as the
+            // journald adapter's journalctl spawn).
+            tokio::process::Command::new(prog)
+                .args(args)
+                .kill_on_drop(true)
+                .output(),
         )
         .await
         .ok()?

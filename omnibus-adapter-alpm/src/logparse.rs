@@ -7,12 +7,13 @@ use omnibus_contracts::dto::packages::{PackageAction, PackageHistoryEntry};
 /// Parses one `[ALPM]` transaction line into a history entry; `None` for any
 /// other line (`[PACMAN]`, `[ALPM-SCRIPTLET]`, blank, ...).
 ///
-/// Shapes (all timestamped `[YYYY-MM-DDThh:mm:ss+ZZZZ] [ALPM]`):
-/// - `installed name version`
+/// Shapes (all timestamped `[YYYY-MM-DDThh:mm:ss+ZZZZ] [ALPM]`, as emitted by
+/// libalpm — every version sits in literal parentheses):
+/// - `installed name (version)`
 /// - `upgraded name (old -> new)`
 /// - `downgraded name (old -> new)`
-/// - `reinstalled name (old -> new)`
-/// - `removed name (old)`
+/// - `reinstalled name (version)` (the arrow form `(old -> new)` is tolerated)
+/// - `removed name (version)`
 pub fn parse_line(line: &str) -> Option<PackageHistoryEntry> {
     let rest = line.strip_prefix('[')?;
     let close = rest.find(']')?;
@@ -28,18 +29,23 @@ pub fn parse_line(line: &str) -> Option<PackageHistoryEntry> {
         "removed" => PackageAction::Remove,
         _ => return None,
     };
-    let (name, from_version, to_version) = if matches!(action, PackageAction::Install) {
-        let (name, version) = tail.split_once(' ')?;
-        (name, None, Some(version))
-    } else if matches!(action, PackageAction::Remove) {
-        let (name, version) = tail.split_once(' ')?;
-        let version = version.strip_prefix('(')?.strip_suffix(')')?;
-        (name, Some(version), None)
-    } else {
-        let (name, pair) = tail.split_once(' ')?;
-        let pair = pair.strip_prefix('(')?.strip_suffix(')')?;
-        let (old, new) = pair.split_once(" -> ")?;
-        (name, Some(old), Some(new))
+    let (name, versions) = tail.split_once(' ')?;
+    // libalpm stores every logged version in literal parentheses
+    // (`installed foo (1.0)`, `removed foo (1.0)`, `upgraded foo (0.9 -> 1.0)`).
+    let versions = parenthesized(versions)?;
+    let (from_version, to_version) = match action {
+        PackageAction::Install => (None, Some(versions)),
+        PackageAction::Remove => (Some(versions), None),
+        // Real logs carry the single-version shape (`reinstalled libx11
+        // (1.8.13-1)`); the arrow form is tolerated for robustness.
+        PackageAction::Reinstall => match versions.split_once(" -> ") {
+            Some((old, new)) => (Some(old), Some(new)),
+            None => (Some(versions), Some(versions)),
+        },
+        PackageAction::Upgrade | PackageAction::Downgrade => {
+            let (old, new) = versions.split_once(" -> ")?;
+            (Some(old), Some(new))
+        }
     };
     Some(PackageHistoryEntry {
         ts_epoch_ms: parse_log_timestamp(ts)?,
@@ -48,6 +54,11 @@ pub fn parse_line(line: &str) -> Option<PackageHistoryEntry> {
         from_version: from_version.map(String::from),
         to_version: to_version.map(String::from),
     })
+}
+
+/// Strips one literal parenthesized field: `(1:22.0.0-3)` -> `1:22.0.0-3`.
+fn parenthesized(field: &str) -> Option<&str> {
+    field.strip_prefix('(')?.strip_suffix(')')
 }
 
 /// Parses `YYYY-MM-DDThh:mm:ss+ZZZZ` (the pacman log timestamp) to epoch ms.
@@ -70,13 +81,19 @@ pub fn parse_log_timestamp(ts: &str) -> Option<i64> {
     };
     let off_h = num(20..22)?;
     let off_m = num(22..24)?;
-    // Honest None for impossible civil values (month 13, day 32, ...).
+    // Honest None for impossible civil values: month 13, day 32, February
+    // 31st, February 29th off a leap year — the day must fit its month under
+    // the full Gregorian rule, otherwise `days_from_civil` would silently
+    // normalize the date into a different day — and impossible zone offsets
+    // (`off_h > 23`, `off_m > 59`), which would silently shift the epoch.
     if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
         || hour > 23
         || minute > 59
         || second > 60
+        || off_h > 23
         || off_m > 59
+        || day < 1
+        || day > i64::from(days_in_month(year, month as u32))
     {
         return None;
     }
@@ -86,6 +103,20 @@ pub fn parse_log_timestamp(ts: &str) -> Option<i64> {
         + minute * 60
         + second;
     Some((secs - offset) * 1000)
+}
+
+/// Length of `month` of `year` under the full Gregorian rule: February 29
+/// exists only on leap years (divisible by 4, except centuries not divisible
+/// by 400). A month outside 1..=12 has length 0, so every impossible month
+/// rejects any day.
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 /// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
@@ -171,38 +202,107 @@ mod tests {
         assert_eq!(parse_log_timestamp("1970-01-01T00:00:00+0000"), Some(0));
         assert_eq!(parse_log_timestamp("not-a-date"), None);
         assert_eq!(parse_log_timestamp("2025-13-01T00:00:00+0000"), None);
+        assert_eq!(
+            parse_log_timestamp("2025-01-01T00:00:00+9900"),
+            None,
+            "an impossible zone offset is rejected, not silently applied"
+        );
+    }
+
+    #[test]
+    fn impossible_civil_dates_reject_the_day() {
+        // The day must fit its month (leap-aware): days_from_civil would
+        // otherwise silently normalize 2025-02-31 into March 3rd.
+        assert_eq!(parse_log_timestamp("2025-02-31T00:00:00+0000"), None);
+        assert_eq!(parse_log_timestamp("2025-04-31T00:00:00+0000"), None);
+        assert_eq!(parse_log_timestamp("2025-02-29T00:00:00+0000"), None);
+        // Full Gregorian leap rule: 2024 and the 400th anniversary 2000 are
+        // leap years; 1900 (a century not divisible by 400) is not.
+        assert_eq!(
+            parse_log_timestamp("2024-02-29T00:00:00+0000"),
+            Some(1_709_164_800_000)
+        );
+        assert_eq!(
+            parse_log_timestamp("2025-02-28T00:00:00+0000"),
+            Some(1_740_700_800_000)
+        );
+        assert_eq!(
+            parse_log_timestamp("2000-02-29T00:00:00+0000"),
+            Some(951_782_400_000)
+        );
+        assert_eq!(parse_log_timestamp("1900-02-29T00:00:00+0000"), None);
     }
 
     #[test]
     fn alpm_transaction_lines_parse() {
-        let upgraded =
-            parse_line("[2025-06-01T12:00:00+0300] [ALPM] upgraded bash (5.2.037-1 -> 5.2.040-1)")
-                .expect("upgraded line must parse");
-        assert_eq!(upgraded.name, "bash");
+        // Lines below are copied verbatim from /var/log/pacman.log (Manjaro,
+        // libalpm's real on-disk format): every version sits in parentheses.
+        let upgraded = parse_line(
+            "[2026-10-03T17:17:26+0300] [ALPM] upgraded archlinux-keyring (20260727-1 -> 20260902-1)",
+        )
+        .expect("upgraded line must parse");
+        assert_eq!(upgraded.name, "archlinux-keyring");
         assert_eq!(upgraded.action, PackageAction::Upgrade);
-        assert_eq!(upgraded.from_version.as_deref(), Some("5.2.037-1"));
-        assert_eq!(upgraded.to_version.as_deref(), Some("5.2.040-1"));
+        assert_eq!(upgraded.from_version.as_deref(), Some("20260727-1"));
+        assert_eq!(upgraded.to_version.as_deref(), Some("20260902-1"));
 
-        let installed = parse_line("[2025-06-01T12:00:00+0000] [ALPM] installed ripgrep 14.1.1-1")
-            .expect("installed line must parse");
+        let installed =
+            parse_line("[2026-10-03T17:12:17+0300] [ALPM] installed xf86-video-ati (1:22.0.0-3)")
+                .expect("installed line must parse");
+        assert_eq!(installed.name, "xf86-video-ati");
         assert_eq!(installed.action, PackageAction::Install);
         assert_eq!(installed.from_version, None);
-        assert_eq!(installed.to_version.as_deref(), Some("14.1.1-1"));
+        assert_eq!(installed.to_version.as_deref(), Some("1:22.0.0-3"));
 
-        let removed = parse_line("[2025-06-02T09:30:00+0000] [ALPM] removed ripgrep (14.1.1-1)")
+        let removed = parse_line("[2026-10-05T18:12:39+0300] [ALPM] removed nodejs (26.8.1-2)")
             .expect("removed line must parse");
+        assert_eq!(removed.name, "nodejs");
         assert_eq!(removed.action, PackageAction::Remove);
+        assert_eq!(removed.from_version.as_deref(), Some("26.8.1-2"));
         assert_eq!(removed.to_version, None);
 
+        // Real logs carry the single-version reinstall shape (no arrow).
+        let reinstalled =
+            parse_line("[2026-10-04T18:42:10+0300] [ALPM] reinstalled libx11 (1.8.13-1)")
+                .expect("single-version reinstalled line must parse");
+        assert_eq!(reinstalled.name, "libx11");
+        assert_eq!(reinstalled.action, PackageAction::Reinstall);
+        assert_eq!(reinstalled.from_version.as_deref(), Some("1.8.13-1"));
+        assert_eq!(reinstalled.to_version.as_deref(), Some("1.8.13-1"));
+
+        // The arrow form stays tolerated (no real line seen, but harmless).
+        let reinstalled_arrow =
+            parse_line("[2025-06-04T08:00:00+0000] [ALPM] reinstalled htop (3.3.0-1 -> 3.3.0-1)")
+                .expect("arrow-form reinstalled line must parse");
+        assert_eq!(reinstalled_arrow.from_version.as_deref(), Some("3.3.0-1"));
+        assert_eq!(reinstalled_arrow.to_version.as_deref(), Some("3.3.0-1"));
+
+        // No downgraded line exists in the reference log; the shape mirrors
+        // upgraded (libalpm always logs `(old -> new)`), synthetic sample.
         let downgraded =
             parse_line("[2025-06-03T08:00:00+0000] [ALPM] downgraded linux (6.12.9-1 -> 6.12.8-1)")
                 .expect("downgraded line must parse");
         assert_eq!(downgraded.action, PackageAction::Downgrade);
+        assert_eq!(downgraded.from_version.as_deref(), Some("6.12.9-1"));
+        assert_eq!(downgraded.to_version.as_deref(), Some("6.12.8-1"));
+    }
 
-        let reinstalled =
-            parse_line("[2025-06-04T08:00:00+0000] [ALPM] reinstalled htop (3.3.0-1 -> 3.3.0-1)")
-                .expect("reinstalled line must parse");
-        assert_eq!(reinstalled.action, PackageAction::Reinstall);
+    #[test]
+    fn bare_version_lines_are_rejected() {
+        // libalpm never emits a version without parentheses; the invented
+        // shapes must not parse (pins the on-disk contract).
+        assert_eq!(
+            parse_line("[2025-06-01T12:00:00+0000] [ALPM] installed ripgrep 14.1.1-1"),
+            None
+        );
+        assert_eq!(
+            parse_line("[2025-06-01T12:00:00+0000] [ALPM] removed ripgrep 14.1.1-1"),
+            None
+        );
+        assert_eq!(
+            parse_line("[2025-06-01T12:00:00+0000] [ALPM] upgraded ripgrep (14.1.1-1)"),
+            None
+        );
     }
 
     #[test]
@@ -265,7 +365,7 @@ mod tests {
     #[test]
     fn previous_version_walks_the_timeline() {
         let entries: Vec<PackageHistoryEntry> = [
-            "[2025-01-01T00:00:00+0000] [ALPM] installed bash 5.2.032-1",
+            "[2025-01-01T00:00:00+0000] [ALPM] installed bash (5.2.032-1)",
             "[2025-02-01T00:00:00+0000] [ALPM] upgraded bash (5.2.032-1 -> 5.2.037-1)",
             "[2025-03-01T00:00:00+0000] [ALPM] upgraded bash (5.2.037-1 -> 5.2.040-1)",
         ]
@@ -280,9 +380,9 @@ mod tests {
     #[test]
     fn previous_version_skips_removals_and_needs_a_real_previous() {
         let removed_then_installed: Vec<PackageHistoryEntry> = [
-            "[2025-01-01T00:00:00+0000] [ALPM] installed bash 5.2.032-1",
+            "[2025-01-01T00:00:00+0000] [ALPM] installed bash (5.2.032-1)",
             "[2025-02-01T00:00:00+0000] [ALPM] removed bash (5.2.032-1)",
-            "[2025-03-01T00:00:00+0000] [ALPM] installed bash 5.2.040-1",
+            "[2025-03-01T00:00:00+0000] [ALPM] installed bash (5.2.040-1)",
         ]
         .iter()
         .filter_map(|line| parse_line(line))
@@ -293,11 +393,28 @@ mod tests {
         assert_eq!(previous, "5.2.032-1");
 
         let single: Vec<PackageHistoryEntry> =
-            ["[2025-01-01T00:00:00+0000] [ALPM] installed bash 5.2.032-1"]
+            ["[2025-01-01T00:00:00+0000] [ALPM] installed bash (5.2.032-1)"]
                 .iter()
                 .filter_map(|line| parse_line(line))
                 .collect();
         assert_eq!(previous_version(&single), None);
         assert_eq!(previous_version(&[]), None);
+    }
+
+    #[test]
+    fn reinstalled_never_becomes_an_undo_target() {
+        // Same-version reinstall events must not create a new version state
+        // (undoing to the identical version is a no-op, not a previous state).
+        let entries: Vec<PackageHistoryEntry> = [
+            "[2025-01-01T00:00:00+0000] [ALPM] installed libx11 (1.8.10-1)",
+            "[2025-02-01T00:00:00+0000] [ALPM] upgraded libx11 (1.8.10-1 -> 1.8.13-1)",
+            "[2025-03-01T00:00:00+0000] [ALPM] reinstalled libx11 (1.8.13-1)",
+        ]
+        .iter()
+        .filter_map(|line| parse_line(line))
+        .collect();
+        let (current, previous) = previous_version(&entries).expect("timeline must resolve");
+        assert_eq!(current, "1.8.13-1");
+        assert_eq!(previous, "1.8.10-1");
     }
 }

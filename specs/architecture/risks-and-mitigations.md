@@ -12,8 +12,8 @@ not as unresolved design.
 
 | Risk | Class | Mitigation | Closed by |
 |---|---|---|---|
-| Electron apps without the a11y flag (per-app enable needed) | platform | doctor leads the per-app enable flow | MS1, roadmap F1.7.1 |
-| Distro default fragmentation (volatile journald on Ubuntu/Mint; NM absent behind netplan/networkd) | platform | version floors + opt-in persistence via doctor + honest capability schemas | MS2, roadmap F2.1.2, F2.2.3, F2.5.1 |
+| Electron apps without the a11y flag (per-app enable needed) | platform | doctor will lead the per-app enable flow (opt-in planned) | roadmap F1.7.1 (remaining) |
+| Distro default fragmentation (journald persistence is a per-machine probe fact; NM absent behind netplan/networkd) | platform | version floors + opt-in persistence via doctor + honest capability schemas | MS2, roadmap F2.1.2, F2.2.3, F2.5.1 |
 | QA matrix 6 distros x DE x X11/Wayland | process | tier model: T1 full CI, T2 smoke on reference versions, T3 community | MS2, roadmap F2.6.2 |
 | macOS TCC friction (human grants via GUI only; Screen Recording re-grant monthly on 15+) | platform | doctor TCC wizard walks the human; reminders by grant state; headless/SSH behavior investigated before work starts | MS3, roadmap F3.1, F3.7.1 |
 | objc2 AX bindings weaker than expected | feasibility | M0 gate with explicit escalation: if AC-4 of F3.1.1 fails, work escalates to F3.2 planning | MS3, roadmap F3.1.1 |

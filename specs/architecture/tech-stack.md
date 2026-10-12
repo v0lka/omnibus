@@ -38,7 +38,7 @@ Choices below are decisions, not suggestions; changing one requires a new ADR.
 - Linux: PKGBUILD (linux adapter set) to AUR; later PPA, Debian repo, COPR (MS2).
 - macOS: Homebrew formula with Developer ID signing and notarization (MS3).
 - Both install the scope manifests into `/etc/omnibus/scopes.d/` (Linux path is the canonical
-  example; the manifests are the single grant store).
+  example; together with the user store `omnibusd grant` writes they form the grant stores).
 
 ## Invariants
 

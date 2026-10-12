@@ -2,8 +2,9 @@
 //!
 //! Modes (specs/contracts/mcp-client-daemon.md, config-and-grants.md):
 //! - `omnibusd`            serve one stdio MCP session (probe → serve → shutdown)
-//! - `omnibusd grant <capability>`   record a grant in the user scope manifest
-//!   (the human runs this; agents have no grant surface — never-list)
+//! - `omnibusd grant <capability> [--path <dir>]...`   record a grant in the
+//!   user scope manifest (the human runs this; agents have no grant surface —
+//!   never-list); parameterized scopes require at least one `--path`
 //! - `omnibusd doctor [--apply <name>]`  CLI doctor: diagnosis, and granular
 //!   mutations only when a human confirms each one interactively
 //! - `omnibusd --version`
@@ -11,8 +12,6 @@
 mod doctor_cli;
 mod grant;
 mod wiring;
-
-use omnibus_contracts::dto::audit::AuditActor;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,7 +37,7 @@ async fn run(args: Vec<String>) -> i32 {
             print_usage();
             0
         }
-        Some("grant") => grant::run(args.get(1).map(String::as_str)),
+        Some("grant") => grant::run(args.get(1..).unwrap_or(&[])).await,
         Some("doctor") => doctor_cli::run(args.get(1..).unwrap_or(&[])).await,
         Some(other) => {
             eprintln!("omnibusd: unknown option: {other}");
@@ -87,7 +86,11 @@ fn print_usage() {
     println!("omnibusd {} — Omnibus daemon", env!("CARGO_PKG_VERSION"));
     println!("usage:");
     println!("  omnibusd                      serve one stdio MCP session");
-    println!("  omnibusd grant <capability>   record a grant in the user scope manifest");
+    println!(
+        "  omnibusd grant <capability> [--path <dir>]...
+                                record a grant in the user scope manifest; \
+         parameterized scopes (files.scope.write) require at least one --path"
+    );
     println!("  omnibusd doctor [--apply <name>]  CLI doctor (human-executed mutations)");
     println!("  omnibusd --version");
 }
@@ -95,9 +98,4 @@ fn print_usage() {
 fn exit_err(message: String, code: i32) -> ! {
     eprintln!("omnibusd: {message}");
     std::process::exit(code);
-}
-
-/// Actor helper re-export for the CLI subcommands.
-pub fn actor(client_name: Option<String>) -> AuditActor {
-    wiring::current_actor(client_name)
 }

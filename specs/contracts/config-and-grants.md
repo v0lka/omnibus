@@ -2,22 +2,22 @@
 
 ## Boundary Rule
 
-The grant store is edited only by the human - by hand or through `omnibus grant` - and is read by the
+The grant store is edited only by the human - by hand or through `omnibusd grant` - and is read by the
 core; nothing in the daemon or the agent can write it, and no runtime consent API exists.
 
 ## Interfaces
 
 | Interface | Crate | Consumed By | Purpose |
 | --------- | ----- | ----------- | ------- |
-| TOML scope manifests `/etc/omnibus/scopes.d/*.toml` | `omnibus-core/src/scopes/` (reader, planned) | core at probe time; human via editor or `omnibus grant` | the single grant store (`[write]`, `[optin]` sections) |
-| `omnibus grant <name>` | `omnibus-core` (CLI mode) | human | edits the manifest; doctor returns the ready-made command |
-| `omnibus doctor` (CLI mode) | `omnibus-core` (tool + CLI) | human | executes opt-in mutations; doctor over MCP can only diagnose |
+| TOML scope manifests — system templates `/etc/omnibus/scopes.d/*.toml` plus the user store `$XDG_CONFIG_HOME/omnibus/scopes.d` (fallback `$HOME/.config/omnibus/scopes.d`), where `omnibusd grant` writes `90-grants.toml` | `omnibus-core/src/scopes.rs` (reader) | core at probe time; human via editor or `omnibusd grant` | the grant stores (`[write]`, `[optin]` sections) |
+| `omnibusd grant <name>` | `omnibusd` (human-executed CLI; edits the store itself, `omnibusd/src/grant.rs`; core only reads) | human | edits the manifest; doctor returns the ready-made command |
+| `omnibusd doctor` (CLI mode) | `omnibusd` (CLI entry; diagnosis logic in `omnibus-core`) | human | executes opt-in mutations; doctor over MCP can only diagnose |
 | `capabilities()` document | `omnibus-core` | agent | the assembled capability report with `remedy` fields |
 
 ## Manifest Format (field names are normative)
 
 ```toml
-# /etc/omnibus/scopes.d/90-agent.toml - edited by a human or `omnibus grant <name>`
+# grant manifests: system templates in /etc/omnibus/scopes.d; the user store that `omnibusd grant <name>` writes is $XDG_CONFIG_HOME/omnibus/scopes.d/90-grants.toml
 [write]                                     # anything not listed is deny
 "service.write"     = {}                    # -> svc_start, svc_stop
 "pkg.undo"          = {}                    # -> pkg_undo (hidden without this entry)
@@ -40,10 +40,12 @@ core; nothing in the daemon or the agent can write it, and no runtime consent AP
 { "capabilities": [
   { "name": "pkg.undo",          "ver": "1.0.0", "status": "present",
     "value": "cache-downgrade",  "adapter": "alpm" },
-  { "name": "journal.prev_boot", "ver": "1.0.0", "status": "present",
-    "value": false,              "adapter": "journald", "note": "volatile: current boot only" },
+  { "name": "journal.prev_boot", "ver": "1.0.0", "status": "opt-in-required",
+    "value": false,              "adapter": "journald",
+    "note": "the journal is volatile; past boots appear after persistent storage is granted",
+    "remedy": "omnibusd grant journal.persistent" },
   { "name": "journal.persistent","ver": "1.0.0", "status": "opt-in-required",
-    "adapter": "journald",       "remedy": "omnibus grant journal.persistent" } ] }
+    "adapter": "journald",       "remedy": "omnibusd grant journal.persistent" } ] }
 ```
 
 - `ver` - semver of the capability contract; `value` - typed value for polymorphic capabilities;
@@ -56,12 +58,12 @@ core; nothing in the daemon or the agent can write it, and no runtime consent AP
 
 - Every fresh instance reads the manifests at probe time and builds the grant table in the core;
   access decisions happen exclusively in the core.
-- Packaging installs the manifest templates (`packaging/scopes.d/*.toml` (planned) into
+- Packaging installs the manifest templates (`packaging/scopes.d/*.toml` into
   `/etc/omnibus/scopes.d/`, roadmap 1.8.1); a fresh install exposes exactly the read-only tool set.
 
 ## Data Flow Across Boundary
 
-- Human -> store: TOML edits or `omnibus grant` (which edits the manifest); doctor over MCP returns
+- Human -> store: TOML edits or `omnibusd grant` (which edits the manifest); doctor over MCP returns
   the command text but cannot execute a mutation.
 - Store -> core: grant entries read at probe time; a changed store is picked up by the next session
   (no config watching - see [topology-and-lifecycle.md](../architecture/topology-and-lifecycle.md)).
@@ -72,8 +74,8 @@ core; nothing in the daemon or the agent can write it, and no runtime consent AP
 
 - A write without a grant, or outside a parameterized scope, yields `ScopeDenied` with a one-line
   copy-paste remedy naming the exact grant to issue.
-- A malformed manifest is a probe-time configuration error surfaced in `capabilities()`/doctor
-  diagnostics; the daemon never guesses the intent of an unparsable entry.
+- A malformed manifest is a probe-time configuration error surfaced in doctor diagnostics; the
+  daemon never guesses the intent of an unparsable entry.
 
 ## Breaking Change Checklist
 

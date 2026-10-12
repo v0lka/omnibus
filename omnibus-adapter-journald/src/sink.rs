@@ -5,7 +5,9 @@
 //! field pairs (`MESSAGE` carries the compact JSON of the whole event; the
 //! `OMNIBUS_*` fields mirror the core schema; `SYSLOG_IDENTIFIER` marks the
 //! daemon) sent to `/run/systemd/journal/socket`. The blocking datagram send
-//! runs inside `tokio::task::spawn_blocking`. Socket failures surface as
+//! runs inside `tokio::task::spawn_blocking` under a bounded write timeout, so
+//! a wedged journald surfaces an error instead of hanging the audit write.
+//! Socket failures surface as
 //! `ContractError::NativeFailure` with the raw OS errno as the code and the
 //! original message as the payload — the core then degrades to its file sink.
 //! Native types (the socket) never leave this module.
@@ -14,6 +16,7 @@ use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use omnibus_contracts::dto::audit::AuditEvent;
@@ -26,6 +29,10 @@ const JOURNAL_SOCKET: &str = "/run/systemd/journal/socket";
 const IDENTIFIER: &str = "omnibusd";
 /// Native code when the OS layer produced no errno.
 const NO_NATIVE_CODE: i32 = -1;
+/// Bound on the blocking datagram send: a wedged journald (receive queue full)
+/// surfaces a native failure — which the core pipeline maps to its file
+/// fallback — instead of hanging the audit write and every tool call with it.
+const SEND_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// The journald-backed audit sink. Cheap to clone: the socket path and the
 /// delivery counter live behind an `Arc`, so contract-suite factories can clone.
@@ -123,10 +130,14 @@ impl AuditSink for JournaldAuditSink {
 }
 
 /// Sends the whole payload as one datagram to the journal socket. Blocking by
-/// nature, therefore always called through `spawn_blocking`.
+/// nature, therefore always called through `spawn_blocking`; the socket carries
+/// a write timeout so a wedged journald surfaces an error, never a hang.
 fn send_datagram(path: &Path, payload: &[u8]) -> Result<usize, ContractError> {
     let socket = UnixDatagram::unbound().map_err(native_io)?;
     socket.connect(path).map_err(native_io)?;
+    socket
+        .set_write_timeout(Some(SEND_WRITE_TIMEOUT))
+        .map_err(native_io)?;
     socket.send(payload).map_err(native_io)
 }
 
@@ -213,6 +224,22 @@ mod tests {
     fn kind_names_the_backend() {
         let sink = JournaldAuditSink::default();
         assert_eq!(sink.kind(), "journald");
+    }
+
+    /// A destination that is not a socket must surface as a native failure —
+    /// no panic, no hang — the result the core pipeline maps to its file
+    /// fallback. Exercises the same error mapping a wedged journald takes when
+    /// the write timeout fires.
+    #[test]
+    fn send_datagram_maps_a_broken_destination_to_native_failure() {
+        let path = std::env::temp_dir().join(format!(
+            "omnibus-journald-sink-not-a-socket-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"not a socket").expect("test fixture must be writable");
+        let result = send_datagram(&path, b"OMNIBUS_TEST=1\n");
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(result, Err(ContractError::NativeFailure { .. })));
     }
 
     /// The suite probe reads the sink's delivery counter.

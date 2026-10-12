@@ -16,7 +16,7 @@ that bypasses a gate is rejected in review, and the automated subset fails the b
 | R3 | Degradation follows the ladder | Every write tool and platform-dependent feature defines behavior in all four states: degraded / hidden (`CapabilityRequired`) / below-floor (`FloorUnsupported`) / opt-in-required | Ladder integration test (roadmap task 1.3.5) runs in CI on a simulated environment |
 | R4 | Negative checks in CI | Boundary prohibitions are enforced automatically: adapter -> adapter imports, adapter -> `omnibus_core` internals, capability name literals, tuple trait signatures, native types in `omnibus-contracts` (roadmap 1.1.3; `omnibus-architecture.md` §8.8.2) | Dependency-rules CI job; a violating PR does not build |
 | R5 | Audit is total (P5) | No write path is considered done without a structured AuditSink event: `{ts, session, actor, tool, adapter, op, params_hash, result, scope_ref}` | Audit-event assertions in the write-path test suites; read paths assert one event per call |
-| R6 | Never-list (`omnibus-architecture.md` §7.4, single source) | Write actions outside human-issued out-of-band grants; model calls from `omnibusd`; a consent broker with UI and any in-band confirmations; switching the network backend; systemd backports; changing system security policies (programmatic TCC issuance) | Review rejects any task that plans one; doctor test 1.7.1 checks tool suggestions against the §7.4 list |
+| R6 | Never-list (`omnibus-architecture.md` §7.4, single source) | Write actions outside human-issued out-of-band grants; model calls from `omnibusd`; a consent broker with UI and any in-band confirmations; switching the network backend; systemd backports; changing system security policies (programmatic TCC issuance) | Review rejects any task that plans one; the doctor consent-denial test (security.rs) asserts every doctor proposal is human-executed and scans proposals against the §7.4 list |
 | R7 | Product honesty | Acceptance criteria never promise more than the platform tier: apt has no undo; a volatile journal yields `prev_boot` only after opt-in; a non-working adapter means the tool is hidden | Release notes and tier claims checked against [platform-matrix.md](platform-matrix.md) |
 
 ## Security CI Tests (derived from R5/R6)
@@ -30,7 +30,15 @@ These negative tests are part of the core suite and must stay red on violation:
 - Every grant-related audit event carries provenance `config|cli|doctor`.
 - An `element_id` issued by one instance never resolves in another instance (typed error across two
   sequential instances).
-- Two parallel write instances always apply in lock-acquisition order; the audit records that order.
+- Two parallel write instances apply in lock-acquisition order while the cross-process gate is
+  healthy; if the lock file cannot be created the gate degrades to process-local only (doctor
+  reports the degradation), and a write that outlives its budget releases the gate while the
+  native operation may still complete. Writes run under exactly one timeout layer — the
+  adapter's own, at or below the core's read budget — and the elapse answer is adapter-defined:
+  a payload-bearing indeterminate `NativeFailure` where the adapter can name the
+  possibly-still-running native write (ALPM code 6 `timeout-indeterminate`, fs-xdg code -2, the
+  systemd1 indeterminate-job payload), a plain `TimeoutError` elsewhere; the audit records
+  whichever honest outcome the serving adapter produced, never a completion order.
 
 ## Suite Tiers per Platform
 
@@ -41,8 +49,9 @@ These negative tests are part of the core suite and must stay red on violation:
 The onboarding autotest (TTFM under 5 minutes) runs per milestone release (roadmap 1.8, 2.6, 3.7).
 
 A milestone ships only when its target platforms are green at their tier level, the milestone demo
-smoke set (demos 1-4) passes, and the onboarding autotest succeeds on a fresh VM installed from the
-native package - the milestone-is-shippable gate (roadmap §0.1; DoD 1.8.3, 2.6.3, 3.7.3).
+smoke set passes (MS1: demos 1-3; from MS2: demos 1-4), and the onboarding autotest succeeds on a
+fresh VM installed from the native package - the milestone-is-shippable gate (roadmap §0.1; DoD
+1.8.3, 2.6.3, 3.7.3).
 
 ## Invariants
 

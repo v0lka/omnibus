@@ -3,7 +3,10 @@
 # In-repo packaging for omnibusd (roadmap task 1.8.1, in-repo part).
 # Build this file with makepkg from packaging/ against the repository working
 # tree: sources are the repo itself, so `source` stays empty and build() runs
-# cargo against $startdir (the directory containing this PKGBUILD).
+# cargo against the workspace root one level ABOVE this directory
+# (cargo's upward search from packaging/ finds the repo-root workspace), so
+# the release binary lands in <repo-root>/target/release/ and package()
+# installs it from there via $startdir/..
 #
 # Scope manifest templates are shipped read-only to /etc/omnibus/scopes.d/
 # (see scopes.d/ next to this file). The daemon never edits them; a human
@@ -42,14 +45,18 @@ source=()
 md5sums=()
 
 build() {
-  cd "$startdir"
+  # The workspace root is one level above this PKGBUILD: cargo's upward
+  # search from packaging/ finds the repo-root workspace, so build there
+  # explicitly and let package() read the artifacts from the same place.
+  cd "$startdir/.."
   cargo build --release
 }
 
 package() {
   # One static binary; adapters are selected at install/run time, not by
-  # packaging separate per-distro binaries.
-  install -Dm0755 "$startdir/target/release/omnibusd" \
+  # packaging separate per-distro binaries. Installed from the workspace-root
+  # target/ directory that build() populated (see the cd above).
+  install -Dm0755 "$startdir/../target/release/omnibusd" \
     "$pkgdir/usr/bin/omnibusd"
 
   # Scope manifest templates: read-only defaults. Admins extend write

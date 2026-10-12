@@ -44,7 +44,7 @@ The complete 29-tool registry with capability bindings lives in
 ## Error Propagation
 
 - Every tool result is either a DTO-shaped value or one of the eight typed codes.
-- `ScopeDenied` always carries a one-line copy-paste remedy (`omnibus grant <name>`).
+- `ScopeDenied` always carries a one-line copy-paste remedy (`omnibusd grant <name>`).
 - Native errors never surface: adapters map them to `NativeFailure{code}` with the original message
   preserved in the payload; the facade forwards them unchanged.
 

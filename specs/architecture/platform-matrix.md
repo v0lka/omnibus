@@ -12,10 +12,10 @@ tests; the machine truth is always `capabilities()`. Source: `omnibus-architectu
 | Arch | atspi | journald, persistent yes (confirmed) | systemd1 | alpm (cache-downgrade undo) | xdg-portal | fs-xdg | ArchWiki | **T1** |
 | Manjaro | atspi | journald, persistent yes (M0 check) | systemd1 | alpm (delayed repos, mhwd, pamac) | xdg-portal | fs-xdg | ArchWiki + Manjaro overlay | **T1** (own test matrix) |
 | Debian trixie | atspi | journald, default M0 check; doctor enables | systemd1 257 | apt (no undo) | xdg-portal; NM read-only | fs-xdg | Debian wiki | **T2** |
-| Debian bookworm | atspi | journald, M0 check | systemd1 252 (on the floor) | apt (no undo) | xdg-portal; NM read-only | fs-xdg | Debian wiki | **T2** (on the floor) |
+| Debian bookworm | atspi (at-spi2 2.46 below the 2.50 floor: `desktop.*` hidden) | journald, M0 check | systemd1 252 (on the floor) | apt (no undo) | xdg-portal; NM read-only | fs-xdg | Debian wiki | **T2** (on the floor) |
 | Debian bullseye | atspi | journald, M0 check | systemd1 247 (below floor) | apt | xdg-portal partial | fs-xdg | Debian wiki | **T3** |
-| Ubuntu LTS | atspi | journald, volatile by default (confirmed); doctor enables | systemd1 255 (24.04, M0 check) | apt (no undo); NM behind netplan | xdg-portal; NM read-only | fs-xdg | Ubuntu docs | **T2** |
-| Mint | atspi | journald, volatile (inherited from Ubuntu) | systemd1 = Ubuntu LTS | apt (no undo) | xdg-portal; X11 default | fs-xdg | Mint docs/forums | **T2** |
+| Ubuntu LTS | atspi | journald, persistence is a per-machine probe fact (m0-findings Table 1: fresh installs default persistent); doctor enables where volatile | systemd1 255 (24.04, M0 check) | apt (no undo); NM behind netplan | xdg-portal; NM read-only | fs-xdg | Ubuntu docs | **T2** |
+| Mint | atspi | journald, persistence is a per-machine probe fact (m0-findings Table 1: Mint 22.x inherits Ubuntu's persistent default); doctor enables where volatile | systemd1 = Ubuntu LTS | apt (no undo) | xdg-portal; X11 default | fs-xdg | Mint docs/forums | **T2** |
 | Fedora desktop | atspi | journald, default M0 check | systemd1 (fresh) | dnf (transactional undo) | xdg-portal (fresh interfaces) | fs-xdg | Fedora docs | **T2** |
 | macOS desktop | ax | unifiedlog | launchd | brew + mas | ScreenCaptureKit (+ AppIntents optional) | fs-tcc | kb-guides | **T2** (second target after Arch) |
 
@@ -26,13 +26,14 @@ tests; the machine truth is always `capabilities()`. Source: `omnibus-architectu
   degradations.
 - **T2 - "full read + safe write"**: all reading guaranteed; writes where the capability is declared;
   documented degradations: apt has no transactional undo (the tool honestly does not promise one),
-  `journal.prev_boot` only with the fact of past boots (Ubuntu/Mint: opt-in persistence via doctor,
-  then a reboot), network is read-only. CI: smoke on reference versions.
+  `journal.prev_boot` only with the fact of past boots (machines probed volatile: opt-in persistence via doctor,
+  then a reboot), network is read-only; on the floor boundary (bookworm) at-spi2 below the floor
+  hides `desktop.*` (a documented, honest row-level degradation). CI: smoke on reference versions.
 - **T3 - "community"**: the build exists, `capabilities()` reports honestly; some interfaces below
   the version floor are absent; no guarantees, community support.
 
 Platform specifics are notes to the matrix, never new categories: Manjaro is a T1 contract with its
-own test matrix and package-freshness caveats; Debian bookworm is T2 on the lower floor boundary;
+own test matrix and package-freshness caveats; Debian bookworm is T2 on the lower floor boundary (below the atspi floor, on the systemd floor — `desktop.*` hidden);
 Fedora adds transactional undo and the freshest portal interfaces.
 
 ## Version Floors

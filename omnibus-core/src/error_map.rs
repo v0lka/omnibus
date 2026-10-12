@@ -24,24 +24,51 @@ pub fn code_name(error: &ContractError) -> &'static str {
 /// `remedy` field.
 pub fn remedy(error: &ContractError, capability: Option<&str>) -> Option<String> {
     match (error, capability) {
-        (ContractError::ScopeDenied, Some(cap)) => Some(format!("omnibus grant {cap}")),
+        (ContractError::ScopeDenied, Some(cap)) => Some(format!("omnibusd grant {cap}")),
         (ContractError::CapabilityRequired, Some(cap)) => Some(format!(
-            "run `omnibus doctor` — the machine lacks {cap}; doctor lists remedies"
+            "run `omnibusd doctor` — the machine lacks {cap}; doctor lists remedies"
         )),
         (ContractError::FloorUnsupported, _) => Some(String::from(
-            "run `omnibus doctor` — the platform is below the version floor",
+            "run `omnibusd doctor` — the platform is below the version floor",
         )),
         (ContractError::AdapterUnavailable, _) => Some(String::from(
-            "run `omnibus doctor` — the subsystem has no active backend",
+            "run `omnibusd doctor` — the subsystem has no active backend",
         )),
         _ => None,
     }
 }
 
-/// Renders the full agent-facing message: code, message, remedy.
-pub fn render(error: &ContractError, capability: Option<&str>) -> String {
+/// The files tools' ScopeDenied remedy. The generic grant form cannot work
+/// here: the read scope has no grantable capability at all (the grant CLI's
+/// `[+scope]` list carries only the write scope and the journal opt-in), and
+/// the write scope is path-parameterized — a bare grant command exits 2. The
+/// working lever is the parameterized write grant (a granted write scope
+/// carries read access, files.md), so the remedy names that exact form — and
+/// states the unconditional carve-out honestly: the daemon's grant-store and
+/// audit-state directories are never readable or writable, so a denial there
+/// has no grant remedy.
+fn fs_scope_denied_remedy() -> Option<String> {
+    use omnibus_contracts::capabilities as c;
+    Some(format!(
+        "omnibusd grant {} --path <directory containing the target> (a granted write scope carries read access); the daemon's grant-store and audit-state directories are never readable or writable — no grant changes that",
+        c::FILES_SCOPE_WRITE
+    ))
+}
+
+/// Renders the full agent-facing message: code, message, remedy — with the
+/// tool-aware ScopeDenied remedy for the files tools (see
+/// [`fs_scope_denied_remedy`]).
+pub fn render_for_tool(error: &ContractError, capability: Option<&str>, tool: &str) -> String {
     let base = error.to_string();
-    match remedy(error, capability) {
+    let remedy_text = match error {
+        ContractError::ScopeDenied
+            if tool == "fs_list" || tool == "fs_read" || tool == "fs_write" =>
+        {
+            fs_scope_denied_remedy()
+        }
+        _ => remedy(error, capability),
+    };
+    match remedy_text {
         Some(remedy_text) => format!(
             "{} [{code}] remedy: {remedy_text}",
             base,
@@ -107,25 +134,53 @@ mod tests {
 
     #[test]
     fn scope_denied_carries_grant_remedy() {
-        let text = render(
+        let text = render_for_tool(
             &ContractError::ScopeDenied,
             capability_for_tool("pkg_install"),
+            "pkg_install",
         );
         assert!(text.contains("ScopeDenied"));
         assert!(
-            text.contains("omnibus grant "),
+            text.contains("omnibusd grant "),
             "remedy is copy-paste ready"
         );
         assert!(text.contains(omnibus_contracts::capabilities::PKG_WRITE));
     }
 
+    /// The files tools' ScopeDenied remedy must be a command the grant CLI
+    /// actually accepts: the read scope has no grantable capability and the
+    /// write scope is path-parameterized, so the generic `omnibusd grant <cap>`
+    /// form would exit 2 — the remedy names the parameterized write grant (a
+    /// granted write scope carries read access) and states the daemon-dir
+    /// carve-out honestly.
+    #[test]
+    fn files_scope_denied_remedy_is_the_parameterized_write_grant() {
+        for tool in ["fs_list", "fs_read", "fs_write"] {
+            let text =
+                render_for_tool(&ContractError::ScopeDenied, capability_for_tool(tool), tool);
+            assert!(
+                text.contains("--path <directory containing the target>"),
+                "{tool}: remedy must be the parameterized, grantable form: {text}"
+            );
+            assert!(
+                text.contains(omnibus_contracts::capabilities::FILES_SCOPE_WRITE),
+                "{tool}: remedy names the grantable capability"
+            );
+            assert!(
+                text.contains("never readable or writable"),
+                "{tool}: remedy states the daemon-dir carve-out: {text}"
+            );
+        }
+    }
+
     #[test]
     fn hidden_tool_call_hints_doctor() {
-        let text = render(
+        let text = render_for_tool(
             &ContractError::CapabilityRequired,
             capability_for_tool("screenshot"),
+            "screenshot",
         );
-        assert!(text.contains("omnibus doctor"));
+        assert!(text.contains("omnibusd doctor"));
         assert_eq!(capability_for_tool("session_info"), None);
     }
 }

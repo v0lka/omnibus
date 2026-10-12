@@ -6,15 +6,39 @@
 //! calls passive getters. `GetAccessPoints` is a passive read of the AP list NM
 //! already holds — it triggers no scan and mutates no state.
 
+use std::time::Duration;
+
 use omnibus_contracts::dto::net::{NetDevice, NetStatusReport, WifiNetwork};
 use omnibus_contracts::errors::ContractError;
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Connection, Proxy};
 
+/// Overall wall-clock budget for one `status()` call. The zbus connection
+/// carries no default per-method timeout, so without this cap a wedged NM
+/// (a real post-resume-from-sleep failure mode) would stall the tool for one
+/// unbounded round trip after another. All interactions of the call — the
+/// presence check, the overview, device enumeration, and the AP reads — share
+/// this single budget, which sits below the core's `TOOL_CALL_BUDGET` (10 s,
+/// `omnibus-core/src/limits.rs`) like the fs-xdg/alpm/journald budgets: at
+/// equality the core's plain `TimeoutError` would always win the tie and mask
+/// the adapter's own typed answer. On elapse the call answers the typed
+/// timeout, never partial data.
+pub const STATUS_BUDGET: Duration = Duration::from_secs(9);
+
+/// Overall wall-clock budget for `connect()`'s bus probes (system-bus connect,
+/// presence check, overview read). A wedged NM must degrade the adapter to
+/// unavailable ("net hidden") at composition time instead of stalling daemon
+/// startup behind an unbounded await.
+pub const CONNECT_BUDGET: Duration = Duration::from_secs(5);
+
 /// Well-known NM identity on the system bus.
 pub const NM_SERVICE: &str = "org.freedesktop.NetworkManager";
 /// The single NM root object.
 pub const NM_ROOT: &str = "/org/freedesktop/NetworkManager";
+
+/// [`ContractError::NativeFailure`] code for D-Bus-level backend failures
+/// (the original message travels in the payload).
+const NATIVE_DBUS: i32 = 1;
 
 /// NM `Connectivity` property values (NetworkManager 1.x D-Bus API).
 const CONNECTIVITY_UNKNOWN: u32 = 0;
@@ -148,7 +172,7 @@ pub fn map_dbus_error(err: zbus::Error) -> ContractError {
         return ContractError::TimeoutError;
     }
     ContractError::NativeFailure {
-        code: 1,
+        code: NATIVE_DBUS,
         payload: err.to_string(),
     }
 }
@@ -161,6 +185,31 @@ fn is_nm_absence(err: &zbus::Error) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when a wireless-leg failure means the remote object does not carry
+/// what we asked for — no `Device.Wireless` interface behind a claimed wifi
+/// device type, or the device object already gone (hot-unplug): the device
+/// exposes no access points. Everything else (timeouts, I/O errors, NM itself
+/// vanishing) answers false so it keeps its typed, propagating meaning.
+fn is_interface_absent(err: &zbus::Error) -> bool {
+    matches!(
+        err,
+        zbus::Error::MethodError(name, _, _)
+            if dbus_error_name_marks_interface_absent(name.as_str())
+    )
+}
+
+/// Pure: does this D-Bus error name belong to the "no such interface, object,
+/// method or property" family that reads as "this device exposes no APs"?
+/// NM's own absence (`ServiceUnknown`) deliberately answers false.
+fn dbus_error_name_marks_interface_absent(name: &str) -> bool {
+    const DBUS_ERROR_PREFIX: &str = "org.freedesktop.DBus.Error.";
+    name.starts_with(DBUS_ERROR_PREFIX)
+        && matches!(
+            &name[DBUS_ERROR_PREFIX.len()..],
+            "UnknownMethod" | "UnknownObject" | "UnknownInterface" | "UnknownProperty"
+        )
 }
 
 /// True when NM owns its well-known name on the system bus.
@@ -239,7 +288,7 @@ async fn read_primary_connection_id(nm: &Proxy<'_>) -> Option<String> {
 pub async fn read_status(connection: &Connection) -> Result<NetStatusReport, ContractError> {
     let overview = read_nm_overview(connection).await?;
     let devices = read_devices(connection).await?;
-    let wifi_networks = read_wifi_networks(connection).await;
+    let wifi_networks = read_wifi_networks(connection).await?;
     Ok(NetStatusReport {
         connectivity: overview.connectivity,
         primary_connection: overview.primary_connection_id,
@@ -365,19 +414,50 @@ async fn read_device_connection_id(connection: &Connection, device: &Proxy<'_>) 
 }
 
 /// Collects the access points visible to every wireless device. The AP list is
-/// read passively per wireless device; non-wireless devices simply yield no AP
-/// interface and are skipped.
-async fn read_wifi_networks(connection: &Connection) -> Vec<WifiNetwork> {
-    let nm = match Proxy::new(connection, NM_SERVICE, NM_ROOT, NM_SERVICE).await {
-        Ok(nm) => nm,
-        Err(_) => return Vec::new(),
-    };
-    let device_paths: Vec<OwnedObjectPath> = match nm.call("GetDevices", &()).await {
-        Ok(paths) => paths,
-        Err(_) => return Vec::new(),
-    };
+/// read passively per wireless device. Enumeration failures are typed errors —
+/// never an empty success, which would be indistinguishable from "no
+/// networks". Non-wireless devices are identified by their device type and
+/// skipped without an AP probe.
+///
+/// Per-device honesty: any leg of a device read that answers "no such
+/// interface/object" only means that this device exposes nothing further —
+/// whether it is the `DeviceType` property read of a device that vanished
+/// between `GetDevices` and the read (hot-unplug), an NM-unmanaged radio
+/// exporting a device type without `Device.Wireless`, or a dongle
+/// disappearing mid-enumeration. Such a device is skipped instead of failing
+/// the whole `net_status` while every other device read fine. Every other
+/// `DeviceType` failure and all transport-shaped failures (timeouts, I/O
+/// errors, NM vanishing mid-scan) stay typed and propagate.
+async fn read_wifi_networks(connection: &Connection) -> Result<Vec<WifiNetwork>, ContractError> {
+    let nm = Proxy::new(connection, NM_SERVICE, NM_ROOT, NM_SERVICE)
+        .await
+        .map_err(map_dbus_error)?;
+    let device_paths: Vec<OwnedObjectPath> =
+        nm.call("GetDevices", &()).await.map_err(map_dbus_error)?;
     let mut networks = Vec::new();
     for device_path in device_paths {
+        let device = Proxy::new(
+            connection,
+            NM_SERVICE,
+            device_path.as_str(),
+            "org.freedesktop.NetworkManager.Device",
+        )
+        .await
+        .map_err(map_dbus_error)?;
+        let kind_code: u32 = match device.get_property("DeviceType").await {
+            Ok(kind_code) => kind_code,
+            // Hot-unplug race: a device listed by GetDevices that vanished
+            // before this property read (or exports no Device interface at
+            // all) exposes nothing to classify — skip it exactly like an
+            // interface-less wireless leg instead of failing net_status for
+            // every other, perfectly readable device. Transport-class
+            // failures keep their typed meaning and propagate.
+            Err(e) if is_interface_absent(&e) => continue,
+            Err(e) => return Err(map_dbus_error(e)),
+        };
+        if kind_code != DEVICE_TYPE_WIFI {
+            continue;
+        }
         let wireless = Proxy::new(
             connection,
             NM_SERVICE,
@@ -385,24 +465,31 @@ async fn read_wifi_networks(connection: &Connection) -> Vec<WifiNetwork> {
             "org.freedesktop.NetworkManager.Device.Wireless",
         )
         .await;
-        let wireless = match wireless {
-            Ok(w) => w,
-            Err(_) => continue,
+        let aps = match wireless {
+            Ok(wireless) => wireless.call("GetAccessPoints", &()).await,
+            Err(e) => Err(e),
         };
-        let ap_paths: Vec<OwnedObjectPath> = match wireless.call("GetAccessPoints", &()).await {
-            Ok(paths) => paths,
-            Err(_) => continue,
+        let ap_paths: Vec<OwnedObjectPath> = match aps {
+            Ok(ap_paths) => ap_paths,
+            Err(e) if is_interface_absent(&e) => continue,
+            Err(e) => return Err(map_dbus_error(e)),
         };
         for ap_path in ap_paths {
+            // An AP whose own property reads failed is omitted (unknown is
+            // not "open" and not "strength 0") — see `read_wireless_ap`.
             if let Some(network) = read_wireless_ap(connection, ap_path.as_str()).await {
                 networks.push(network);
             }
         }
     }
-    dedupe_by_ssid(networks)
+    Ok(dedupe_by_ssid(networks))
 }
 
-/// Reads one access point object; hidden APs (empty SSID) are skipped.
+/// Reads one access point object; hidden APs (empty SSID) are skipped. A
+/// failed property read omits the AP: the DTO cannot express "unknown", and
+/// substituting defaults would fabricate `secured: false` (inverting a
+/// security-relevant fact) or `strength: 0` from a failed read — unknown is
+/// neither.
 async fn read_wireless_ap(connection: &Connection, path: &str) -> Option<WifiNetwork> {
     let ap = Proxy::new(
         connection,
@@ -417,10 +504,10 @@ async fn read_wireless_ap(connection: &Connection, path: &str) -> Option<WifiNet
         return None;
     }
     let ssid = String::from_utf8_lossy(&ssid_bytes).into_owned();
-    let strength = ap.get_property::<u8>("Strength").await.unwrap_or(0);
-    let wpa_flags: u32 = ap.get_property("WpaFlags").await.unwrap_or(0);
-    let rsn_flags: u32 = ap.get_property("RsnFlags").await.unwrap_or(0);
-    let ap_flags: u32 = ap.get_property("Flags").await.unwrap_or(0);
+    let strength = ap.get_property::<u8>("Strength").await.ok()?;
+    let wpa_flags: u32 = ap.get_property("WpaFlags").await.ok()?;
+    let rsn_flags: u32 = ap.get_property("RsnFlags").await.ok()?;
+    let ap_flags: u32 = ap.get_property("Flags").await.ok()?;
     let secured = wpa_flags != 0 || rsn_flags != 0 || ap_flags & AP_FLAG_PRIVACY != 0;
     Some(WifiNetwork {
         ssid,
@@ -461,6 +548,36 @@ mod tests {
         assert_eq!(connectivity_name(CONNECTIVITY_NONE), "none");
         assert_eq!(connectivity_name(CONNECTIVITY_UNKNOWN), "unknown");
         assert_eq!(connectivity_name(999), "unknown");
+    }
+
+    #[test]
+    fn interface_absent_names_skip_a_device_and_read_as_no_aps() {
+        // The same "no such interface/object" family gates both per-device
+        // legs: the `DeviceType` property read of a device that vanished
+        // between GetDevices and the read (hot-unplug), and the wireless
+        // `GetAccessPoints` call behind a claimed wifi device. Both mean
+        // "this device exposes nothing" and skip the device; nothing else
+        // may collapse into that skip.
+        for absent in [
+            "org.freedesktop.DBus.Error.UnknownMethod",
+            "org.freedesktop.DBus.Error.UnknownObject",
+            "org.freedesktop.DBus.Error.UnknownInterface",
+            "org.freedesktop.DBus.Error.UnknownProperty",
+        ] {
+            assert!(dbus_error_name_marks_interface_absent(absent), "{absent}");
+        }
+        // NM vanishing and transport failures must keep their typed meaning,
+        // never collapse into "this device has no access points".
+        for keep_typed in [
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "org.freedesktop.DBus.Error.AccessDenied",
+            "org.freedesktop.NetworkManager.MiscError",
+        ] {
+            assert!(
+                !dbus_error_name_marks_interface_absent(keep_typed),
+                "{keep_typed}"
+            );
+        }
     }
 
     #[test]

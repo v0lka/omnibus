@@ -9,10 +9,10 @@ and every action is audited. This spec is the normative restatement of `omnibus-
 
 ## Grants: Exactly One Mechanism
 
-- Store: TOML manifests `/etc/omnibus/scopes.d/*.toml` (sections `[write]` and `[optin]`; field names
+- Stores: TOML manifests — system templates `/etc/omnibus/scopes.d/*.toml` plus the user store `omnibusd grant` writes (`$XDG_CONFIG_HOME/omnibus/scopes.d/90-grants.toml`, fallback `$HOME/.config/omnibus/scopes.d`; sections `[write]` and `[optin]`; field names
   fixed in [config contract](../contracts/config-and-grants.md)).
 - Issuer: a human, out of the agent's reach - by editing the manifest or by running
-  `omnibus grant <name>` (the command edits the manifest; doctor returns the ready-made command).
+  `omnibusd grant <name>` (the command edits the manifest; doctor returns the ready-made command).
 - Default: read-only. The grant list is a whitelist; anything not listed is denied.
 - Revocation: remove the entry. "Temporary" means issued-then-revoked; there is no separate
   session-grant channel (with stdio the config is static - persistent/session distinction is
@@ -34,7 +34,7 @@ and every action is audited. This spec is the normative restatement of `omnibus-
 | Tier | Rule | Examples |
 |---|---|---|
 | Never through the agent | Writes only under human-issued grants; no runtime consent API | all [+scope] tools |
-| Opt-in via doctor, explicit consent | Changes to the system that Omnibus itself needs; the mutation is executed by a human (CLI `omnibus doctor` or the command doctor printed) | persistent journald, per-app Electron a11y flags, macOS TCC wizard |
+| Opt-in via doctor, explicit consent | Changes to the system that Omnibus itself needs; the mutation is executed by a human (CLI `omnibusd doctor` or the command doctor printed) | persistent journald, macOS TCC wizard (the per-app Electron a11y-flag opt-in is planned) |
 | Never | No implementation may do these at all | switching the network backend, systemd backports, changing system security policies (TCC is granted only by a human via GUI or MDM/PPPC) |
 
 - doctor over MCP can never mutate the system regardless of the agent's answers: it returns diagnosis

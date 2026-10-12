@@ -81,12 +81,12 @@ adapters ↮ adapters (запрещено)        adapters ↮ core::internal (�
 
 1. **MCP-фасад** — rmcp, транспорт stdio (HTTP — вне v1); топология: omnibusd — child MCP-клиента, по инстансу на соединение (N агентов = N инстансов одного бинарника); постоянного демона и admin-канала нет — состояние = конфиг + ephemeral-сессия, координация инстансов — только file-lock (§3.9). Реестр инструментов, генерация JSON-схем из DTO.
 2. **Сессии** — сессия = MCP-соединение: живёт и умирает с процессом инстанса, TTL и фоновых таймеров нет; идентификатор — только для корреляции аудита. *Все* opaque-токены (session_id, element_id) mintит только ядро.
-3. **Скоупы** — TOML-манифесты (`/etc/omnibus/scopes.d/*.toml`), read-only по умолчанию. Гранты выдаёт только человек вне контура агента, ровно один механизм: записи в TOML-манифестах — руками или командой `omnibus grant <грант>` (редактирует манифест; doctor возвращает готовую команду). «Временный» грант = выданный и отозванный: отдельного session-канала нет — при stdio-топологии конфиг статичен, различие persistent/session иллюзорно; рантайм не имеет API приёма подтверждений — ни один MCP-метод не принимает токен согласия. Принятие решений о доступе — исключительно в ядре.
+3. **Скоупы** — TOML-манифесты (системные шаблоны `/etc/omnibus/scopes.d/*.toml` + пользовательский стор `$XDG_CONFIG_HOME/omnibus/scopes.d/90-grants.toml`, который пишет `omnibusd grant`), read-only по умолчанию. Гранты выдаёт только человек вне контура агента, ровно один механизм: записи в TOML-манифестах — руками или командой `omnibusd grant <грант>` (редактирует манифест; doctor возвращает готовую команду). «Временный» грант = выданный и отозванный: отдельного session-канала нет — при stdio-топологии конфиг статичен, различие persistent/session иллюзорно; рантайм не имеет API приёма подтверждений — ни один MCP-метод не принимает токен согласия. Принятие решений о доступе — исключительно в ядре.
 
    Якоря формата (имена полей фиксируются формальной спекой; состав записей — иллюстративный):
 
    ```toml
-   # /etc/omnibus/scopes.d/90-agent.toml — правится человеком или `omnibus grant <имя>`
+   # системные шаблоны — /etc/omnibus/scopes.d; `omnibusd grant <имя>` пишет пользовательский стор …/scopes.d/90-grants.toml
    [write]                                     # всё неперечисленное — deny
    "service.write"     = {}                    # → svc_start, svc_stop
    "pkg.undo"          = {}                    # → pkg_undo (скрыт без этой записи)
@@ -100,10 +100,12 @@ adapters ↮ adapters (запрещено)        adapters ↮ core::internal (�
    { "capabilities": [
      { "name": "pkg.undo",          "ver": "1.0.0", "status": "present",
        "value": "cache-downgrade",  "adapter": "alpm" },
-     { "name": "journal.prev_boot", "ver": "1.0.0", "status": "present",
-       "value": false,              "adapter": "journald", "note": "volatile: только текущая загрузка" },
+     { "name": "journal.prev_boot", "ver": "1.0.0", "status": "opt-in-required",
+       "value": false,              "adapter": "journald",
+       "note": "журнал volatile; прошлые загрузки появятся после включения персистентного хранилища",
+       "remedy": "omnibusd grant journal.persistent" },
      { "name": "journal.persistent","ver": "1.0.0", "status": "opt-in-required",
-       "adapter": "journald",       "remedy": "omnibus grant journal.persistent" } ] }
+       "adapter": "journald",       "remedy": "omnibusd grant journal.persistent" } ] }
    ```
 
    (`ver` — semver контракта capability; `value` — типизированное значение для capability с вариантами; `note` — ограничения деградации; `remedy` — copy-paste-команда, тот же принцип, что у ремедиации `ScopeDenied`; отсутствие capability = отсутствие записи в документе.)
@@ -149,9 +151,9 @@ adapters ↮ adapters (запрещено)        adapters ↮ core::internal (�
 | `desktop.element` | `desktop.tree` | `DesktopA11y` |
 | `desktop.set_value` / `desktop.invoke` | `desktop.tree` + `desktop.write.typed` (+ write-скоуп) | `DesktopA11y` |
 | `clip_read` | `portal.clipboard` | `ScreenCapture` |
-| `clip_write` | `portal.clipboard` (+ write-скоуп `clip.write`) | `ScreenCapture` |
+| `clip_write` | `portal.clipboard` (+ write-скоуп) | `ScreenCapture` |
 | `screenshot` | `portal.screenshot` | `ScreenCapture` |
-| `notify` | `portal.notify` (+ write-скоуп `notify.send`) | `Notify` |
+| `notify` | `portal.notify` (+ write-скоуп) | `Notify` |
 | `svc_list` / `svc_status` | `service.read` | `ServiceManager` |
 | `svc_start` / `svc_stop` | `service.write` (+ write-скоуп) | `ServiceManager` |
 | `journal_query` | `journal.query` (+ `journal.prev_boot` для прошлых загрузок) | `Journal` |
@@ -179,20 +181,20 @@ adapters ↮ adapters (запрещено)        adapters ↮ core::internal (�
 | **Arch** | atspi | journald — persistent ✓ (подтверждено) | systemd1 | alpm (downgrade из кэша ⇒ `pkg.undo` ✓) | xdg-portal | fs-xdg | ArchWiki | **T1** |
 | **Manjaro** | atspi | journald — persistent ✓ ⚠M0 | systemd1 | alpm (задержанные репы, mhwd, pamac) | xdg-portal | fs-xdg | ArchWiki + Manjaro-overlay | **T1** *(своя тест-матрица)* |
 | **Debian trixie** | atspi | journald — дефолт ⚠M0; doctor включает | systemd1 257 | apt (**undo нет**) | xdg-portal; NM read-only | fs-xdg | Debian wiki | **T2** |
-| **Debian bookworm** | atspi | journald — ⚠M0 | systemd1 252 *(на полу)* | apt (**undo нет**) | xdg-portal; NM read-only | fs-xdg | Debian wiki | **T2** *(на полу)* |
+| **Debian bookworm** | atspi 2.46 < пола 2.50 — `desktop.*` скрыты | journald — persistent по умолчанию (M0, табл. 1) | systemd1 252 *(на полу)* | apt (**undo нет**) | xdg-portal; NM read-only | fs-xdg | Debian wiki | **T2** *(на полу; задокументированная деградация: `desktop.*` скрыты)* |
 | **Debian bullseye** | atspi | journald — ⚠M0 | systemd1 247 *(ниже пола)* | apt | xdg-portal — частично | fs-xdg | Debian wiki | **T3** |
-| **Ubuntu LTS** | atspi | journald — volatile по умолчанию (подтверждено); doctor включает | systemd1 255 (24.04) ⚠M0 | apt (**undo нет**); NM за netplan | xdg-portal; NM read-only | fs-xdg | Ubuntu docs | **T2** |
-| **Mint** | atspi | journald — volatile (унаследовано от Ubuntu) | systemd1 = Ubuntu LTS | apt (**undo нет**) | xdg-portal; X11 дефолт | fs-xdg | Mint docs/forums | **T2** |
+| **Ubuntu LTS** | atspi | journald — persistent по умолчанию (M0, табл. 1); факт машины, doctor включает при volatile | systemd1 255 (24.04) ⚠M0 | apt (**undo нет**); NM за netplan | xdg-portal; NM read-only | fs-xdg | Ubuntu docs | **T2** |
+| **Mint** | atspi | journald — persistent (наследует дефолт Ubuntu, M0 табл. 1) | systemd1 = Ubuntu LTS | apt (**undo нет**) | xdg-portal; X11 дефолт | fs-xdg | Mint docs/forums | **T2** |
 | **Fedora desktop** | atspi | journald — дефолт ⚠M0 | systemd1 (свежий) | dnf (transactional undo ⇒ `pkg.undo` ✓) | xdg-portal (свежие интерфейсы) | fs-xdg | Fedora docs | **T2** |
 | **macOS desktop** | ax | unifiedlog | launchd | brew + mas | ScreenCaptureKit (+ AppIntents как опц. бэкенд) | fs-tcc | kb-guides | **T2** *(вторая цель после победы на Arch)* |
 
 **Определения tier:**
 
 - **T1 — «гарантированный контракт»:** полный набор инструментов, read+write, диагностика прошлых загрузок из коробки, `pkg.undo` по возможностям пакетного менеджера, CI на каждый релиз ядра и адаптеров, документированных деградаций нет.
-- **T2 — «полное чтение + безопасная запись»:** всё чтение гарантировано; write — там, где capability объявлена; задокументированные деградации: у apt нет транзакционного undo (инструмент честно не обещает откат), `journal.prev_boot` — при факте прошлых загрузок (Ubuntu/Mint: opt-in персистентности через doctor, затем перезагрузка), сеть — read-only. CI — smoke на эталонных версиях.
+- **T2 — «полное чтение + безопасная запись»:** всё чтение гарантировано; write — там, где capability объявлена; задокументированные деградации: у apt нет транзакционного undo (инструмент честно не обещает откат), `journal.prev_boot` — при факте прошлых загрузок (машины, пробеченные volatile: opt-in персистентности через doctor, затем перезагрузка), сеть — read-only; на нижней границе полов (bookworm) at-spi2 ниже пола скрывает `desktop.*` — задокументированная деградация строки, не отдельный тир. CI — smoke на эталонных версиях.
 - **T3 — «community»:** сборка существует, `capabilities()` отчитывается честно; часть интерфейсов ниже version floor отсутствует; гарантий нет, поддержка сообществом.
 
-Платформенные особенности — примечания матрицы, а не отдельные категории: Manjaro — контракт T1 со своей тестовой матрицей и оговорками по свежести пакетов (mhwd, pamac, задержанные репы); Debian bookworm — T2 на нижней границе полов (systemd 252 — на полу; полный T2-набор активен, smoke на эталоне); Fedora — T2 плюс transactional undo (dnf) и самые свежие portal-интерфейсы. Машинная правда особенностей — `capabilities()`.
+Платформенные особенности — примечания матрицы, а не отдельные категории: Manjaro — контракт T1 со своей тестовой матрицей и оговорками по свежести пакетов (mhwd, pamac, задержанные репы); Debian bookworm — T2 на нижней границе полов (systemd 252 — на полу; at-spi2 2.46 ниже пола 2.50 — `desktop.*` скрыты, FloorUnsupported; остальные подсистемы активны, smoke на эталоне); Fedora — T2 плюс transactional undo (dnf) и самые свежие portal-интерфейсы. Машинная правда особенностей — `capabilities()`.
 
 **Version floors (версионные полы):**
 
@@ -202,7 +204,7 @@ adapters ↮ adapters (запрещено)        adapters ↮ core::internal (�
 - Wayland — portal-интерфейсы по версии `xdg-desktop-portal`; X11-пути — без пола.
 - varlink — вне гарантий T2 (только при свежих systemd); основной путь — D-Bus.
 
-**Согласованность с предыдущим анализом переносимости:** persistent journal есть только в части семей (Arch — да; Ubuntu/Mint — volatile по умолчанию; Debian/Fedora — проверить в M0 и включать через doctor); транзакционного undo у apt нет — `pkg.undo` объявляют только alpm (downgrade из кэша) и dnf (transactional undo); NetworkManager не универсален (Ubuntu Server — netplan+networkd, Debian — трёхвариантный выбор) ⇒ сетевые write-действия вне v1, NM read-only «когда есть»; macOS: AX API зрелее AT-SPI2, но гейт — TCC-права (Accessibility, Screen Recording с ежемесячным re-grant, Automation, Full Disk Access), программная выдача — только MDM/PPPC.
+**Согласованность с предыдущим анализом переносимости:** persistent journald по умолчанию есть во всех шести семьях на свежих установках (M0, табл. 1); волатильность — конфигурация конкретной машины, включается через doctor; транзакционного undo у apt нет — `pkg.undo` объявляют только alpm (downgrade из кэша) и dnf (transactional undo); NetworkManager не универсален (Ubuntu Server — netplan+networkd, Debian — трёхвариантный выбор) ⇒ сетевые write-действия вне v1, NM read-only «когда есть»; macOS: AX API зрелее AT-SPI2, но гейт — TCC-права (Accessibility, Screen Recording с ежемесячным re-grant, Automation, Full Disk Access), программная выдача — только MDM/PPPC.
 
 ---
 
@@ -231,8 +233,8 @@ adapters ↮ adapters (запрещено)        adapters ↮ core::internal (�
 
 ### 7.4. Политика включений (что ядро может менять в системе)
 
-- **Никогда через агента:** любые write-действия — только по грантам, выданным человеком вне контура агента (TOML, `omnibus grant`, doctor); рантайм не имеет API приёма подтверждений — in-band «пользователь подтвердил» от агента неотличим от подделки. Отказ → `ScopeDenied` с copy-paste-ремедиацией в одну команду.
-- **Opt-in через doctor, с явным согласием:** включение персистентного journald (`mkdir /var/log/journal` + restart) — открывает флагманскую диагностику прошлых загрузок на Ubuntu/Mint/Debian; включение a11y-флагов у Electron-приложений. Канал тот же, что у грантов: мутации исполняет только человек — CLI-режим `omnibus doctor` (или выполнение выданной им команды); doctor, вызванный агентом через MCP, только диагностирует и возвращает copy-paste-ремедиацию — мутировать систему он не может ни при каком ответе агента.
+- **Никогда через агента:** любые write-действия — только по грантам, выданным человеком вне контура агента (TOML, `omnibusd grant`, doctor); рантайм не имеет API приёма подтверждений — in-band «пользователь подтвердил» от агента неотличим от подделки. Отказ → `ScopeDenied` с copy-paste-ремедиацией в одну команду.
+- **Opt-in через doctor, с явным согласием:** включение персистентного journald (`mkdir /var/log/journal` + restart, исполняет человек; грант `omnibusd grant journal.persistent` — только политика) — открывает флагманскую диагностику прошлых загрузок на любой машине с volatile-конфигом journald; включение a11y-флагов у Electron-приложений. Канал тот же, что у грантов: мутации исполняет только человек — CLI-режим `omnibusd doctor` (или выполнение выданной им команды); doctor, вызванный агентом через MCP, только диагностирует и возвращает copy-paste-ремедиацию — мутировать систему он не может ни при каком ответе агента.
 - **Никогда:** смена сетевого бэкенда, бэкпорты systemd, изменение системных политик безопасности (TCC выдаётся только человеком через GUI или MDM/PPPC).
 - **Принятый риск (read):** `screenshot` на Linux — без нашего гейта: Wayland защищает портал DE (не контракт Omnibus), X11-путь системного гейта не имеет; пересмотр — opt-in-грант по доказанному спросу. На macOS гейт — TCC.
 

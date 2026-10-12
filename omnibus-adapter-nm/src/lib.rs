@@ -33,25 +33,36 @@ pub struct NmAdapter {
 impl NmAdapter {
     /// Connects to the system bus and verifies NM is live there. Any failure
     /// along the way is reported as adapter-unavailable: the composition root
-    /// simply leaves the slot empty and the net tool stays hidden.
+    /// simply leaves the slot empty and the net tool stays hidden. The probes
+    /// run under one wall-clock budget ([`nm::CONNECT_BUDGET`]): the zbus
+    /// connection carries no default method timeout, so a wedged NM must
+    /// degrade honestly at startup instead of stalling composition behind an
+    /// unbounded await.
     pub async fn connect() -> Result<Self, ContractError> {
-        let connection = Connection::system()
-            .await
-            .map_err(|_| ContractError::AdapterUnavailable)?;
-        if !nm::nm_is_present(&connection).await {
-            return Err(ContractError::AdapterUnavailable);
-        }
-        let overview = match nm::read_nm_overview(&connection).await {
-            Ok(overview) => overview,
-            // NM answered the bus-level presence check but not the property
-            // read: treat the backend as unavailable rather than half-alive.
-            Err(_) => return Err(ContractError::AdapterUnavailable),
+        let probes = async {
+            let connection = Connection::system()
+                .await
+                .map_err(|_| ContractError::AdapterUnavailable)?;
+            if !nm::nm_is_present(&connection).await {
+                return Err(ContractError::AdapterUnavailable);
+            }
+            let overview = match nm::read_nm_overview(&connection).await {
+                Ok(overview) => overview,
+                // NM answered the bus-level presence check but not the
+                // property read: treat the backend as unavailable rather
+                // than half-alive.
+                Err(_) => return Err(ContractError::AdapterUnavailable),
+            };
+            Ok(Self {
+                connection,
+                version: overview.version,
+                networking_enabled: overview.networking_enabled,
+            })
         };
-        Ok(Self {
-            connection,
-            version: overview.version,
-            networking_enabled: overview.networking_enabled,
-        })
+        match tokio::time::timeout(nm::CONNECT_BUDGET, probes).await {
+            Ok(constructed) => constructed,
+            Err(_elapsed) => Err(ContractError::AdapterUnavailable),
+        }
     }
 }
 
@@ -86,12 +97,25 @@ impl NetworkStatus for NmAdapter {
     }
 
     /// Devices, connectivity, and visible wifi networks; read-only by contract.
+    ///
+    /// The whole call — presence check included — shares one wall-clock budget
+    /// ([`nm::STATUS_BUDGET`]): on elapse it answers the typed timeout. The
+    /// report DTO cannot express partial data, so a timed-out call returns no
+    /// report at all rather than one that presents itself as complete.
     async fn status(&self) -> Result<NetStatusReport, ContractError> {
-        // NM may have left the bus since connect(): absence stays honest.
-        if !nm::nm_is_present(&self.connection).await {
-            return Err(ContractError::AdapterUnavailable);
+        let reads = async {
+            // NM may have left the bus since connect(): absence stays honest.
+            if !nm::nm_is_present(&self.connection).await {
+                return Err(ContractError::AdapterUnavailable);
+            }
+            nm::read_status(&self.connection).await
+        };
+        // Every read below is passive, so dropping the in-flight futures on
+        // elapse has no native side effects.
+        match tokio::time::timeout(nm::STATUS_BUDGET, reads).await {
+            Ok(result) => result,
+            Err(_elapsed) => Err(ContractError::TimeoutError),
         }
-        nm::read_status(&self.connection).await
     }
 }
 

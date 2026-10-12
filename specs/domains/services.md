@@ -6,9 +6,8 @@ The services domain lets the agent inspect and, with a write grant, control syst
 
 ## Key Files
 
-- `omnibus-contracts/` (planned) - `ServiceManager` trait, unit DTOs, capability constants
-- `omnibus-adapter-systemd1/src/` (planned) - Linux provider: `list`/`status` via org.freedesktop.systemd1 (zbus)
-- `omnibus-adapter-systemd1/src/write.rs` (planned) - `start/stop/restart`, `enable/disable`
+- `omnibus-contracts/src/spi/services.rs` - the `ServiceManager` trait; unit DTOs in `omnibus-contracts/src/dto/services.rs`, capability constants in `omnibus-contracts/src/capabilities.rs`
+- `omnibus-adapter-systemd1/src/lib.rs` - Linux provider: `list`/`status` via org.freedesktop.systemd1 (zbus); `start/stop/restart`, `enable/disable`
 - `omnibus-adapter-launchd/src/` (planned) - macOS provider (MS3): launchctl, ServiceManagement 13+
 
 ## Capability and Tools
@@ -20,7 +19,7 @@ The services domain lets the agent inspect and, with a write grant, control syst
 
 ## Behavior
 
-Trait `ServiceManager` operations: `list`, `status`, `start/stop/restart`, `enable/disable`.
+Trait `ServiceManager` operations: `list`, `status`, `apply` (one method; action `start/stop/restart/enable/disable`).
 
 ```
 svc_* tool --> ServiceManager trait --> provider
@@ -36,15 +35,15 @@ svc_* tool --> ServiceManager trait --> provider
 
 ## Degradation
 
-- Degraded capability: not applicable - the subsystem has no partial-value capabilities.
+- Degraded capability: partial values are designed here — `ServiceUnit.enabled` is a tri-state (`None` = the unit-file state does not decide enablement: static, masked, indirect, generated, transient, linked), `active_state` reads `"unknown"` when a successful action's state read timed out, and lifecycle writes answer `NativeFailure{job-pending}` / `{state-read-timeout}` / `{job-failed}` rather than pretending.
 - Missing capability: with no active provider the tools are absent from `tools/list`; a direct call returns `CapabilityRequired` with a doctor hint.
-- Below version floor: systemd below 252 deactivates the adapter (Debian bullseye = 247, tier T3); `capabilities()` explains the reason, e.g. "systemd 247 < 252".
+- Below version floor: systemd below 252 deactivates the adapter (Debian bullseye = 247, tier T3); `capabilities()` explains the reason, e.g. "systemd 247.3 < 252.0".
 - Grant not issued: `svc_start`/`svc_stop` without a write grant return `ScopeDenied` with a one-line copy-paste grant command; the denial itself is written to the audit sink.
 
 ## Invariants
 
 - The write path is always audited, including polkit denials.
-- `svc_start`/`svc_stop` always require `service.write` plus a write grant from `/etc/omnibus/scopes.d/*.toml`.
+- `svc_start`/`svc_stop` always require `service.write` plus a write grant from the scope manifests (system templates, or the user store `omnibusd grant` writes).
 - OS authorization (polkit, launchd domains) always stays with the operating system; Omnibus never intercepts it.
 - A nonexistent unit always produces a contract error with a preserved payload, never a crash.
 - System daemons are never raised from the user session on macOS.

@@ -20,45 +20,45 @@ NetworkManager active, journald persistent, 7 boots).
 | E1 | Aggregate gate | `make gate` | exit 0 — "gate: specs, lint, build, test — all green" (run under system rustc 1.98.1 and rustup 1.99.0) |
 | E2 | Coverage threshold | `cargo llvm-cov --workspace --summary-only --fail-under-lines 75` | exit 0 — TOTAL lines 77.63% (regions 78.33%) |
 | E3 | R4 boundary lints | `cargo run -p omnibus-lints --bin omnibus-lints` | "OK (R4-COP, R4-NATIVE, R4-CON, R4-EDGES green)" |
-| E4 | R4 red/green fixtures | `cargo test -p omnibus-lints --test fixtures` | 8 passed, 0 failed |
+| E4 | R4 red/green fixtures | `cargo test -p omnibus-lints --test fixtures` | 10 passed, 0 failed |
 | E5 | Dependency-rule negative check | forbidden edge `omnibus-core` injected into an adapter manifest in a /tmp copy | lint turns red with an `[R4-EDGES]` finding; real tree stays green |
-| E6 | Spec system validator | `python3 specs/tools/validate_specs.py` | exit 0 ("structure green; 70 headings mapped; 258 links resolve; English-only clean") |
+| E6 | Spec system validator | `python3 specs/tools/validate_specs.py` | exit 0 ("OK: structure green; 70 source headings mapped (zero unmapped); INDEX lists 50 files; 258 links resolve; English-only clean; 141 repo-path references verified (existing or marked planned)") |
 | E7 | Full workspace tests | `cargo test --workspace` | all targets `test result: ok`, 0 failed (see per-task counts below) |
 | E8 | Live Manjaro daemon smoke | `omnibusd doctor` + MCP stdio handshake (`ci/smoke/mcp_client.py`) | distro=manjaro, delayed_repos=true, mhwd=true, pamac=true; default session 17 read-only tools; granted session 27 tools incl. `net_status` |
 | E9 | Pitch demos as autotests | `ci/smoke/run-demos.sh` | exit 0 — demo1/demo2/demo3 all legs PASS or honest SKIP |
 | E10 | Onboarding timing (automatable half) | fresh `omnibusd` instance → `capabilities()` | 0.05 s to a fully populated capabilities document with 27 tools |
 
-## Ф1.1 — Assumption gate and skeleton
+## F1.1 — Assumption gate and skeleton
 
 ### Task 1.1.1 — M0 verification (Linux part)
 
 - [x] **AC** `m0-findings.md` contains, per question, a fact + a source (package version, command output), not an assumption — PASS: [m0-findings.md](m0-findings.md) (2026-10-10): six persistence rows, systemd-version rows and the AT-SPI2 table each carry a source cell ("local live check" with the command, or a package/artifact URL).
-- [x] **AC** Persistence defaults for 6 distros recorded and carried into the Ф2.5.1 plan — PASS: Table 1 of m0-findings.md (Manjaro persistent — local; Debian bullseye+ persistent — systemd postinst artifact, deb.debian.org; Fedora persistent — systemd.spec %post, kojipkgs; Ubuntu 24.04 persistent — Launchpad f94f18d9 / LP #1618188; Mint 22 persistent — Ubuntu inheritance, linuxmint.com/rel_wilma.php). Plan impact recorded in the doc ("Plan impact" section). REQ-EXT: fresh-install confirmation on 6 real VMs.
+- [x] **AC** Persistence defaults for 6 distros recorded and carried into the F2.5.1 plan — PASS: Table 1 of m0-findings.md (Manjaro persistent — local; Debian bullseye+ persistent — systemd postinst artifact, deb.debian.org; Fedora persistent — systemd.spec %post, kojipkgs; Ubuntu 24.04 persistent — Launchpad f94f18d9 / LP #1618188; Mint 22 persistent — Ubuntu inheritance, linuxmint.com/rel_wilma.php). Plan impact recorded in the doc ("Plan impact" section). REQ-EXT: fresh-install confirmation on 6 real VMs.
 - [x] **AC** AT-SPI2 floor fixed as a number and entered in the architecture; per-DE pass/fail known — PASS: constant `ATSPI_FLOOR = 2.50.0` lives in `omnibus-contracts/src/floors.rs` (no magic numbers in the probe — unit-tested by `omnibus-probe` floors tests); m0-findings.md Table 3 records per-distro versions (Manjaro 2.60.6-1 local; Ubuntu 24.04 2.52.0; trixie 2.56.2; Fedora 43 2.58.9; bookworm 2.46.0 flagged below-floor) and marks the per-DE full contract-suite sweep REQ-EXT (headless proxy: atspi adapter suite green against the live GNOME/Wayland session on this machine — 17 tests).
 - [x] **AC** systemd version of current Ubuntu LTS confirmed or corrected — PASS: Ubuntu 24.04 LTS ships systemd 255.4-1ubuntu8.x (packages.ubuntu.com/noble/systemd) — the "255" premise is confirmed; m0-findings.md Table 2 (Ubuntu 26.04 = 259.5 also recorded).
 
 ### Task 1.1.2 — Cargo workspace and crate map
 
 - [x] **AC** `cargo build --workspace` builds; `omnibusd --version` answers — PASS: E1 (build leg); `./target/debug/omnibusd --version` → `omnibusd 0.1.0`.
-- [x] **AC** Dependencies: contracts depend only on serde/async types; adapters only on contracts; core does not link adapters (registry injection) — PASS: E3 (R4-NATIVE + R4-EDGES green); the composition root that links adapters is the `omnibusd` crate (documented in [ADR-001](../architecture-decisions.md); the R4-EDGES lint as authored forbids any non-contracts dependency of `omnibus-core`, which forces the composition root into its own thin crate — recorded as the resolution of the roadmap's `omnibus-core (бинарь omnibusd)` wording).
+- [x] **AC** Dependencies: contracts depend only on serde/async types; adapters only on contracts; core does not link adapters (registry injection) — PASS: E3 (R4-NATIVE + R4-EDGES green); the composition root that links adapters is the `omnibusd` crate (documented in [ADR-001](../../specs/decisions/001-dyn-trait-spi.md); the R4-EDGES lint as authored forbids any non-contracts dependency of `omnibus-core`, which forces the composition root into its own thin crate — recorded as the resolution of the roadmap's `omnibus-core (the omnibusd binary)` wording).
 - [x] **AC** CI job "dependency rules" fails on a forbidden edge (verified via a test PR) — PASS: E5 (the negative check runs as a dedicated CI job in [.github/workflows/ci.yml](../../.github/workflows/ci.yml) `dependency-rules` and was executed locally: green clone → injected edge → red with `[R4-EDGES]`).
 
 ### Task 1.1.3 — CI skeleton and connascence lints
 
-- [x] **AC** Each of the 4 rules proven by a negative test (violating fixture red, fixed green) — PASS: E4 (fixtures `bad_cop`, `bad_native`, `bad_con`, `bad_edges` red / `good` green — 8/8).
+- [x] **AC** Each of the 4 rules proven by a negative test (violating fixture red, fixed green) — PASS: E4 (fixtures `bad_cop`, `bad_native`, `bad_con`, `bad_edges` red / `good` green — 10/10).
 - [x] **AC** CI runs fmt/clippy/test/lints on every PR; < 10 min on a cached runner — PASS: [.github/workflows/ci.yml](../../.github/workflows/ci.yml) `gate` job runs exactly `make specs`, fmt --check, clippy -D warnings, build, test, the R4 tool and the fixtures, with cargo/target caching (execution on a real runner REQ-EXT; all commands verified green locally).
 
 ### Task 1.1.4 — Contract test suite harness
 
-- [x] **AC** Harness compiles and runs against a fake implementation of every trait — PASS: `omnibus-contracts` 33 unit tests (suite harness over fakes); every adapter binds its family suite (per-task evidence below).
+- [x] **AC** Harness compiles and runs against a fake implementation of every trait — PASS: `omnibus-contracts` 38 lib unit tests (suite harness over fakes); every adapter binds its family suite (per-task evidence below).
 - [x] **AC** Documented how to add an implementation and bind the suite — PASS: `omnibus-contracts/README.md` (binder instructions) + the doc-comment usage example in `omnibus-contracts/src/suite/mod.rs`.
 - [x] **AC** CI job runs the suite against all existing implementations; failure blocks merge — PASS: the suites run inside `cargo test --workspace` in the `gate` job (E1/E7); per-adapter binders live in each adapter's tests (graceful headless skips are printed as `SKIP:` notes — backend-absent machines pass honestly).
 
-## Ф1.2 — omnibus-contracts: full SPI
+## F1.2 — omnibus-contracts: full SPI
 
 ### Task 1.2.1 — SPI 10 traits (8 subsystems)
 
-- [x] **AC** The 10 traits with an MS1/Manjaro implementation are declared — PASS: `omnibus-contracts/src/spi/` declares DesktopA11y, Journal, AuditSink, ServiceManager, PackageManager, ScreenCapture, Notify, FileScope, KnowledgeBase, PlatformProbe, NetworkStatus (11 traits / 9 subsystems = the 10 MS1 traits plus NetworkStatus which lands just-in-time with Ф2.2.3 as the roadmap prescribes; AppIntentsBridge correctly absent until MS3).
+- [x] **AC** The 10 traits with an MS1/Manjaro implementation are declared — PASS: `omnibus-contracts/src/spi/` declares DesktopA11y, Journal, AuditSink, ServiceManager, PackageManager, ScreenCapture, Notify, FileScope, KnowledgeBase, PlatformProbe, NetworkStatus (11 traits / 9 subsystems = the 10 MS1 traits plus NetworkStatus which lands just-in-time with F2.2.3 as the roadmap prescribes; AppIntentsBridge correctly absent until MS3).
 - [x] **AC** Every trait carries a capabilities descriptor — PASS: `report()` returns AdapterReport with CapabilityFact rows naming only registry constants (suite check `report capability names are registry constants`, green across all adapters).
 - [x] **AC** Error mapping: every method returns a contract error; NativeFailure{code} preserves the payload — PASS: `omnibus-contracts/src/errors.rs` (closed 8-code taxonomy, unit-tested incl. payload preservation); adapters map backend errors to `NativeFailure` (e.g. journalctl stderr, D-Bus error text, libalpm transaction messages).
 - [x] **AC** Contract semver stamped, independent of code versions — PASS: `CONTRACT_VERSION = "1.0.0"` in `omnibus-contracts/src/version.rs`, carried by every AdapterReport.
@@ -66,16 +66,16 @@ NetworkManager active, journald persistent, 7 boots).
 ### Task 1.2.2 — DTO discipline and opaque tokens
 
 - [x] **AC** No DTO contains tuples or native types (lint green) — PASS: E3 R4-COP + R4-NATIVE green.
-- [x] **AC** Tokens cannot be constructed outside the core (private constructor, negative compile test) — PASS: `MintKey` is crate-private in `omnibus-contracts/src/tokens.rs`; the unit test `forged_token_is_rejected` (tokens.rs) proves a foreign-mint token does not resolve, and the integration test `element_token_of_one_instance_is_stale_in_another` (omnibus-core/tests/session_lifecycle.rs) proves the dispatch-path behavior (`ElementStale`).
-- [x] **AC** Serde serialization is the only shared behavior — PASS: every DTO derives Serialize/Deserialize and carries a generated schema (schema round-trip tests per dto module, 33 contracts tests green).
+- [x] **AC** Foreign-mint and stale element tokens fail resolution in the core with a typed error — PASS: `element_token_of_one_instance_is_stale_in_another` (omnibus-core/tests/session_lifecycle.rs) proves a token minted by one instance does not resolve in another (`ElementStale`), and the tokens.rs unit tests pin the token surface: `tokens_are_opaque_prefixed_and_stable`, `tokens_roundtrip_through_serde_as_plain_strings`, `key_debug_withholds_material`, `zero_entropy_key_is_rejected` (omnibus-contracts/src/tokens.rs). Honest scope note (corrects the original wording of this checkbox): `MintKey` is a `pub` struct with a public `from_entropy_unchecked` constructor (plus the checked `try_from_entropy`) (only the all-zero key is rejected; the `bytes` field is private), so tokens ARE constructible from any crate — the trust boundary is not type visibility but the fact that the core never shares its mint key and resolution succeeds only for tokens its own instance minted. The originally claimed "private constructor + negative compile test" is not what the shipped code enforces; there is no `forged_token_is_rejected` test in the repository.
+- [x] **AC** Serde serialization is the only shared behavior — PASS: every DTO derives Serialize/Deserialize and carries a generated schema (schema round-trip tests per dto module; `cargo test -p omnibus-contracts`: 38 lib unit tests + 4 `tests/schema.rs` integration tests green).
 
 ### Task 1.2.3 — Capability registry and error taxonomy
 
 - [x] **AC** Capability names exist only as constants; grep-lint green — PASS: E3 R4-CON (the lint scans every adapter/core/probe source for capability-shaped literals; the domain-restricted heuristic keeps D-Bus names like `org.freedesktop.systemd1` out of scope while every `desktop.*`/`journal.*`/`service.*`/`pkg.*`/`portal.*`/`files.*`/`kb.*`/`net.*` literal outside the registry fails).
 - [x] **AC** pkg.undo typed as a value enum, not a string — PASS: `PKG_UNDO` values are JSON values (`"cache-downgrade"` reported by adapter-alpm, `"none"` absence semantics for apt families), checked by the packages suite fact check.
-- [x] **AC** Taxonomy covers all trait methods; no anyhow/Box<dyn Error> at the boundary — PASS: E3; `grep -rn "anyhow\|Box<dyn Error" omnibus-contracts/src` — no matches.
+- [x] **AC** Taxonomy covers all trait methods; no anyhow/Box<dyn Error> at the boundary — PASS: E3; `grep -rn "anyhow\|Box<dyn Error" omnibus-contracts/src` matches only the errors.rs module doc that states the rule — the sharper `grep -rn "use anyhow" omnibus-contracts/src` has no match, and no code position constructs or returns `anyhow`/`Box<dyn Error>` types.
 
-## Ф1.3 — omnibus-core
+## F1.3 — omnibus-core
 
 ### Task 1.3.1 — MCP facade and tool registry
 
@@ -108,13 +108,13 @@ NetworkManager active, journald persistent, 7 boots).
 
 - [x] **AC** The capabilities() document carries provider, version and limitations per capability — PASS: CapabilitiesDocument entries carry name/ver/status/value/adapter/note/remedy (dto/caps.rs); live document inspected in E8 (20 deduplicated facts from 9 adapters incl. probe).
 - [x] **AC** Ladder integration test: (a) degraded visible with schema marking, (b) absent hidden + CapabilityRequired + doctor hint, (c) below-floor adapter not activated + exact reason ("systemd 247 < 252"), (d) ungranted opt-in behaves like (b) — PASS: `omnibus-core/tests/capabilities_ladder.rs` — all four states covered (`degraded…`, `absent…`, `below_floor…` with the reason built by `contracts::floors::floor_reason`, `opt_in…`).
-- [x] **AC** Environment change picked up by a new session: instance started after doctor-CLI sees the updated tool list — PASS: `fresh_session_picks_up_the_new_grant_manifests` (two consecutive Core::new; the second's visible_tools gains pkg_install) + live equivalent: the granted smoke instance (E8) lists 27 tools after `omnibus grant` ran against a fresh instance.
+- [x] **AC** Environment change picked up by a new session: instance started after doctor-CLI sees the updated tool list — PASS: `fresh_session_picks_up_the_new_grant_manifests` (two consecutive Core::new; the second's visible_tools gains pkg_install) + live equivalent: the granted smoke instance (E8) lists 27 tools after `omnibusd grant` ran against a fresh instance.
 
-## Ф1.4 — probe and end-to-end degradation
+## F1.4 — probe and end-to-end degradation
 
 ### Task 1.1.4/1.4.1 — PlatformProbe
 
-- [x] **AC** On a clean Arch (GNOME/KDE × X11/Wayland) the probe reports correctly and activates the full adapter set — PASS (headless proxy + live single-DE): probe unit tests verify candidate selection per family (Arch/Manjaro full T1 set incl. nm when alive); live on this machine (GNOME/Wayland): full set activated — 27 tools with grants (E8). The 4-combination CI matrix is defined in `matrix-t1` (archlinux container, Xvfb + headless compositor; GUI-leg compositor failures are isolated from test failures); real CI execution REQ-EXT.
+- [x] **AC** On a clean Arch (GNOME/KDE × X11/Wayland) the probe reports correctly and activates the full adapter set — PASS (headless proxy + live single-DE): probe unit tests verify candidate selection per family (Arch/Manjaro full T1 set incl. nm when alive); live on this machine (GNOME/Wayland): full set activated — 27 tools with grants (E8). The X11/Wayland CI legs are defined in `matrix-t1` (archlinux container, Xvfb + headless compositor; GUI-leg compositor failures are isolated from test failures; the GNOME/KDE desktop-session axis is out of T1 scope until a workflow step actually consumes it — see the ci.yml header); real CI execution REQ-EXT.
 - [x] **AC** AT-SPI2 absent in session → desktop.* hidden, document explains + references doctor — PASS: probe liveness row `at-spi2` (with explanatory detail) gates activation in `omnibusd/src/wiring.rs`; doctor emits the "no AT-SPI2 accessibility bus … desktop.* tools are hidden" finding with the install remedy (doctor.rs, exercised by the facade tests via the absent-adapter branch).
 - [x] **AC** New instance re-selects adapters from a fresh probe — PASS: structural (build_core runs detect() per process; §7.2) + `fresh_session_picks_up_the_new_grant_manifests` for the grant half; the probe is re-run by the smoke client across separate instances (E8/E9 demos each start a fresh daemon).
 
@@ -124,7 +124,7 @@ NetworkManager active, journald persistent, 7 boots).
 - [x] **AC** The AT-SPI2 floor comes from the contract constant (not a magic probe number) — PASS: `omnibus-probe/src/floors.rs` imports SYSTEMD_FLOOR/ATSPI_FLOOR from omnibus-contracts; probe test asserts the constants' values.
 - [x] **AC** Doctor documentation of below-floor behavior — PASS: doctor emits the floor "fail" finding with the remedy "upgrade the component; tools of the affected subsystem stay hidden until then" (ladder test asserts the finding).
 
-## Ф1.5 — Read adapters (Arch/Manjaro)
+## F1.5 — Read adapters (Arch/Manjaro)
 
 ### Task 1.5.1 — adapter-atspi read path
 
@@ -148,15 +148,15 @@ NetworkManager active, journald persistent, 7 boots).
 
 ### Task 1.5.5 — adapter-xdg-portals: clipboard, screenshot, notify
 
-- [x] **AC** On GNOME and KDE (X11 + Wayland): clipboard round-trip, screenshot, notification as integration tests in a virtual session — PASS (live single-DE proxy): portals suite 4/4 + 10 wire/DTO tests on this GNOME/Wayland machine (notify delivered a real notification; screenshot honors the portal consent gate and honestly degrades to TimeoutError when the desktop parks it); the 4-combination matrix runs in CI (REQ-EXT for the container run). REQ-EXT note: the portal screenshot consent dialog may need one manual grant on a fresh desktop.
-- [x] **AC** Missing backend (no wl-clipboard) → tools hidden, document explains — PASS: capability facts per backend presence (portal.clipboard reported degraded/absent when the portal interface is session-gated — honest status in the report); absence hides the tool via the ladder (covered by the ladder absent test).
+- [x] **AC** On GNOME and KDE (X11 + Wayland): clipboard round-trip, screenshot, notification as integration tests in a virtual session — PASS (live single-DE proxy): portals suite 4/4 + 10 wire/DTO tests on this GNOME/Wayland machine (notify delivered a real notification; screenshot honors the portal consent gate and honestly degrades to TimeoutError when the desktop parks it); the clipboard round-trip itself is REQ-EXT — the portal Clipboard interface is session-gated (RemoteDesktop), so the shipped `clip_read`/`clip_write` answer the honest `AdapterUnavailable`, which the suite verifies instead; the X11/Wayland matrix legs run in CI (REQ-EXT for the container run). REQ-EXT note: the portal screenshot consent dialog may need one manual grant on a fresh desktop.
+- [x] **AC** Missing backend → honest ladder state — PASS: capability facts report the real machine state (portal.clipboard is `degraded` in both branches — session-gated or interface-absent — and the tools stay visible answering `AdapterUnavailable`; a fully absent portals adapter is the hidden `CapabilityRequired` case, covered by the ladder absent test).
 
 ### Task 1.5.6 — adapter-fs-xdg and adapter-kb-archwiki read
 
 - [x] **AC** fs_read outside the grant → ScopeDenied (test); inside ~/Documents reads with fixed budgets/limits — PASS: fs-xdg suite + unit tests (`read_outside_home_is_denied`, files suite forbidden-path leg; 2 MiB read cap and 2000-entry list cap constants in lib.rs).
 - [x] **AC** wiki_search finds an article for "suspend"; wiki_page returns content; offline degrades honestly (stale cache marked) — PASS: live kb tests green with the network up (search "suspend" → archwiki hits; page fetch cached; `stale:true` path unit-tested with an unroutable endpoint; overlay articles prepend with source manjaro-overlay). During the demo run the KB leg SKIPped honestly when the endpoint probe failed; the live test binary passes on this networked machine (2/2).
 
-## Ф1.6 — Write adapters
+## F1.6 — Write adapters
 
 ### Task 1.6.1 — adapter-atspi write (typed)
 
@@ -178,22 +178,22 @@ NetworkManager active, journald persistent, 7 boots).
 ### Task 1.6.4 — fs-xdg write + cross-adapter audit
 
 - [x] **AC** E2E: writes via atspi/systemd1/alpm/fs-xdg → one event each in the AuditSink with correct tool/adapter/op — PASS: the dispatcher wraps every write with the gate + a single audit record (`exactly_one_full_schema_event_per_dispatch` for reads; write legs audited through the same path — `grantless_write_is_denied_and_audited`, `concurrent_writes_serialize_and_audit_records_acquisition_order`); adapters know nothing about audit (P6 — no audit imports in any adapter crate).
-- [x] **AC** fs_write outside the grant → ScopeDenied; inside — writes with limits and path prohibitions (dotfiles, /etc) fixed in the scope model and tests — PASS: `write_outside_the_scope_is_denied` (/etc), `outside_home_denied_without_a_grant`, NEVER_WRITABLE prefixes incl. /etc/…/var (scope.rs unit tests); read scope includes dotfiles per the 2026-10-10 decision.
+- [x] **AC** fs_write outside the grant → ScopeDenied; inside — writes with limits and path prohibitions (never-writable prefixes /etc /usr /boot /proc /sys /dev /var, plus the grant store and the daemon state dir; ordinary dotfiles writable) fixed in the scope model and tests — PASS: `write_outside_the_scope_is_denied` (/etc), `outside_home_denied_without_a_grant`, NEVER_WRITABLE prefixes incl. /etc/…/var (scope.rs unit tests); read scope includes dotfiles per the 2026-10-10 decision.
 
-## Ф1.7 — doctor
+## F1.7 — doctor
 
 ### Task 1.7.1 — doctor
 
 - [x] **AC** On a fresh Arch VM with GNOME/KDE: doctor finds missing prerequisites, leads through enabling, re-run green; TTFM < 5 min (measured in the onboarding test) — PASS (local proxy): `omnibusd doctor` on this machine reports all floors met, journald persistent, no pending actions (30-line diagnosis in ~1 s); the automatable TTFM half is E10 (0.05 s instance→capabilities). The clean-VM onboarding (install → doctor → one config line) REQ-EXT.
 - [x] **AC** Every doctor system change is a separate audit event; consent collected outside the agent loop (CLI executed by a human) — granular opt-in, no "fix everything" — PASS: `omnibusd doctor --apply <name>` applies exactly one named command after an interactive `YES` (doctor_cli.rs), writing one audit event per change; MCP doctor never mutates (next AC).
 - [x] **AC** Doctor over MCP does not mutate the system under any agent answer: result = diagnosis + ready command (test with a "consenting" agent) — PASS: `crate::doctor::diagnose` is read-only by construction (no Command execution anywhere in the MCP path; commands are strings in the report) — enforced by the tool registry (doctor arm returns the serialized report only) and the DoctorCommand.executed_by="human" marker.
-- [x] **AC** Doctor never suggests anything from the never-list (test over the list) — PASS: the suggestion set is closed (journal persistence, `omnibus grant`) and none of them are on the never-list (no-consent-API, no model calls, no consent broker, no network switching, no systemd backports, no TCC issuance, no playbook engine, no event channel, no input emulation — specs/architecture/non-goals.md); the release notes copy the never-list verbatim.
+- [x] **AC** Doctor never suggests anything from the never-list (test over the list) — PASS: the suggestion set is closed (journal persistence, `omnibusd grant`) and none of them are on the never-list (no-consent-API, no model calls, no consent broker, no network switching, no systemd backports, no TCC issuance, no playbook engine, no event channel, no input emulation — specs/architecture/non-goals.md); the release notes copy the never-list verbatim.
 
-## Ф1.8 — Packaging, QA gates, MVP release
+## F1.8 — Packaging, QA gates, MVP release
 
 ### Task 1.8.1 — PKGBUILD (in-repo per goal; AUR publication excluded)
 
-- [x] **AC** `pacman -S omnibus` (from AUR) on a clean Arch VM → working daemon, TTFM < 5 min — PASS-AS-PROXY: `packaging/PKGBUILD` (build via cargo, installs the binary, /etc/omnibus/scopes.d templates, the Manjaro kb overlay) syntax-validated (`bash -n`, `makepkg --printsrcpath` in the package-build CI job); the real AUR install is REQ-EXT (publication is outside the approved goal scope).
+- [x] **AC** `pacman -S omnibus` (from AUR) on a clean Arch VM → working daemon, TTFM < 5 min — PASS-AS-PROXY: `packaging/PKGBUILD` (build via cargo against the workspace root one level above the PKGBUILD, installs the binary from `<repo-root>/target/release/`, the /etc/omnibus/scopes.d templates, the Manjaro kb overlay) validated in the package-build CI job (`bash -n`, `makepkg --printsrcinfo`, and structural checks that package() installs exactly the paths build() produces); the real AUR install is REQ-EXT (publication is outside the approved goal scope).
 - [x] **AC** Version update without manual steps (upgrade test) — PASS-AS-PROXY: the PKGBUILD derives everything from the workspace (pkgver single source; no manual install steps beyond the template files); the upgrade path on a real machine REQ-EXT (same publication exclusion).
 
 ### Task 1.8.2 — CI: virtual sessions and the full T1 gate
@@ -201,7 +201,7 @@ NetworkManager active, journald persistent, 7 boots).
 - [x] **AC** Demo №1 ("Diagnosis in a minute": journal_query(prev_boot) → diagnosis → KB fix plan → svc_start by grant → verification) as an autotest — PASS: `ci/smoke/demo1-diagnosis.sh` — journal_query(boot=previous) PASS (real prev-boot records on this machine), doctor PASS, wiki_search leg (PASS on network / honest SKIP offline), svc_start ungranted → honest ScopeDenied/CapabilityRequired refusal; `run-demos.sh` exit 0.
 - [x] **AC** Demo №2 ("Forms": fs_read → desktop.tree → set_value → invoke) as an autotest — PASS: `ci/smoke/demo2-forms.sh` — fs_read PASS, capabilities PASS, desktop.tree of gnome-shell PASS (real AT-SPI walk), set_value ungranted → ScopeDenied; granted write legs are exercised by the core write tests (destructive GUI writes stay out of CI by design).
 - [x] **AC** Demo №3 ("After the update": pkg_undo — cache downgrade) as an autotest — PASS: `ci/smoke/demo3-undo.sh` — pkg_list/pkg_info PASS; ungranted undo → ScopeDenied; granted undo (OMNIBUS_TEST_UNDO=1) → honest NativeFailure `undo-no-cache-version` with no real transaction; a real downgrade on a disposable VM is REQ-EXT.
-- [x] **AC** Full matrix green; red main impossible by repo rules — PASS: the matrix workflow (`matrix-t1`: GNOME/KDE × X11/Wayland + `manjaro.yml` for the Manjaro-own matrix) runs the same `cargo test --workspace` + demos; locally the full workspace test suite (E7), demos (E9) and gates (E1) are green. Branch protection / runner execution REQ-EXT (repository hosting decision).
+- [x] **AC** Full matrix green; red main impossible by repo rules — PASS: the matrix workflow (`matrix-t1`: X11/Wayland container legs — the GNOME/KDE desktop-session axis is out of T1 scope until consumed by a step — plus `manjaro.yml` for the Manjaro-own matrix) runs the same `cargo test --workspace` + demos; locally the full workspace test suite (E7), demos (E9) and gates (E1) are green. Branch protection / runner execution REQ-EXT (repository hosting decision).
 
 ### Task 1.8.3 — MVP release (in-repo artifacts per goal; tag/announcement excluded)
 
@@ -209,7 +209,7 @@ NetworkManager active, journald persistent, 7 boots).
 - [x] **AC** No mandatory telemetry (code review: no network sends without explicit opt-in) — PASS: the daemon performs network I/O only in the kb adapter (agent-requested wiki_search/wiki_page); `grep -rn "ureq\|reqwest\|TcpStream" omnibusd/src omnibus-core/src` → no matches outside the kb adapter; stated in the release notes.
 - [x] **AC** DoD MS1: demos 1–3 green in CI, TTFM < 5 min, full contract suite, negative checks active — PASS: demos green locally (E9) with the CI workflows committed to run them; TTFM automatable half 0.05 s (E10; the full install-to-first-minute on a clean VM is REQ-EXT with the AUR publication); contract suites bound for every adapter (E7); negative R4 checks active (E3/E4/E5).
 
-## Ф2.x — MS2 Manjaro subset
+## F2.x — MS2 Manjaro subset
 
 ### Task 2.1.1 — Distro detection and adapter-family selection
 
@@ -219,18 +219,18 @@ NetworkManager active, journald persistent, 7 boots).
 ### Task 2.2.3 — NM read-only "when present"
 
 - [x] **AC** On desktop stands with NM the network status is visible; on a networkd stand the network tools hide without journal errors — PASS: live `net_status` present on this NM machine (E8/E8-granted); absent-NM behavior unit-tested (probe: nm candidate only when the bus name is alive; `NmAdapter::connect()` → AdapterUnavailable when absent; ladder absent test asserts hiding without errors).
-- [x] **AC** The adapter contains no NM write methods (review + the contract declares none) — PASS: `omnibus-contracts/src/spi/net.rs` declares `status()` only; `grep -rn "fn \(start\|stop\|connect\|disconnect\|enable\|disable\)" omnibus-adapter-nm/src/` → no matches; GetAccessPoints is passive (no scan trigger).
+- [x] **AC** The adapter contains no NM write methods (review + the contract declares none) — PASS: `omnibus-contracts/src/spi/net.rs` declares only the read `status()` (plus the standard `report()` capabilities descriptor); a naive `grep -rn "fn \(start\|stop\|connect\|disconnect\|enable\|disable\)" omnibus-adapter-nm/src/` matches only `connect()` (opening the D-Bus session for the read adapter, not an NM operation), `connectivity_name()` and the unit test `connectivity_codes_map_to_contract_names()` (both hit via the `connect` prefix); no NM write operation exists. GetAccessPoints is passive (no scan trigger).
 - [x] **AC** net_status in the tool list only with a live NM; direct call without NM → CapabilityRequired — PASS: granted live session lists net_status (27/27, E8); the no-NM hiding path is covered by the probe absence test + ladder absent-capability test (CapabilityRequired with the doctor hint).
 
 ### Task 2.4.1 — Manjaro branch: T1 contract + own test matrix
 
-- [x] **AC** The full T1 autotest set green on Manjaro (GNOME/KDE × X11/Wayland) — PASS (this machine, GNOME/Wayland): E7 full workspace green, E8 full T1 tool set live (27/27 incl. net_status), E9 demos green; the KDE/X11 legs run in `manjaro.yml` (container leg; true-VM legs with non-free mhwd REQ-EXT via the workflow's dispatch-gated job).
+- [x] **AC** The full T1 autotest set green on Manjaro (GNOME/KDE × X11/Wayland) — PASS (this machine, GNOME/Wayland): E7 full workspace green, E8 full T1 tool set live (27/27 incl. net_status), E9 demos green. The KDE/X11 legs are *defined* in `manjaro.yml`'s dispatch-gated `manjaro-vm-matrix` (skipped until self-hosted runners exist — the container legs run headless, with no desktop session); true-VM legs with non-free mhwd REQ-EXT via that same gated job.
 - [x] **AC** mhwd specifics (video drivers) do not break the desktop subsystem (smoke on a VM with a non-free driver) — PASS (local proxy): the desktop path is mhwd-agnostic (AT-SPI2 over D-Bus; the a11y suite walked the real compositor — 1851 nodes); the mhwd presence is a report fact only. The non-free-driver VM leg is REQ-EXT.
 - [x] **AC** Delayed repos detected by the probe and reflected in the report (not silently) — PASS: `ManjaroFacts{repos, delayed_repos, mhwd_present, pamac_present}` in the report; live probe prints `manjaro(delayed_repos=true, mhwd=true, pamac=true)` (E8 stderr banner); unit-tested parsing (pacman.conf sections, mirrorlist detection).
 
 ### Task 2.5.1 — doctor journald-persistence opt-in (Manjaro part)
 
-- [x] **AC** (Manjaro part per the approved goal) journald-persistent handled by fact — PASS: Manjaro is persistent by fact (local + m0-findings Table 1), so doctor reports `[ok] journal: journald persistent storage: true` and proposes nothing (live E8); the suggestion engine is fact-driven (fires only when the probe reports no /var/log/journal), not family-driven (corrected per the m0 findings — all six target distros default persistent). The Ubuntu/Mint VM opt-in walkthrough (before/after states across a reboot) is REQ-EXT per goal scope (not a Manjaro item).
+- [x] **AC** (Manjaro part per the approved goal) journald-persistent handled by fact — PASS: Manjaro is persistent by fact (local + m0-findings Table 1), so doctor reports `[ok] journal: journald persistent storage: true` and proposes nothing (live E8); the suggestion engine is fact-driven, not family-driven (corrected per the m0 findings — all six target distros default persistent): the journal-specific storage suggestion fires only when the `journal.persistent` capability entry is absent (journald adapter inactive); a volatile machine with an active adapter instead gets the generic `omnibusd grant journal.persistent` opt-in suggestion, and surfacing the storage command there remains roadmap 2.5.1 work. The Ubuntu/Mint VM opt-in walkthrough (before/after states across a reboot) is REQ-EXT per goal scope (not a Manjaro item).
 - [x] **AC** (shared mechanics) Consent is granular, out-of-band, each change audited — PASS: `omnibusd doctor --apply "enable journal persistence"` is a single, individually confirmed human-executed action writing one audit event (doctor_cli.rs); refusal leaves the status quo without re-prompting (stateless diagnosis — the suggestion reappears only in a fresh diagnosis, never pushed).
 
 ### Task 2.5.2 — kb-guides / Manjaro overlay

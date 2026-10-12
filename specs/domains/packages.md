@@ -6,8 +6,8 @@ The packages domain covers listing, inspecting, installing, removing, and - wher
 
 ## Key Files
 
-- `omnibus-contracts/` (planned) - `PackageManager` trait, package DTOs, capability constants
-- `omnibus-adapter-alpm/src/` (planned) - Arch/Manjaro provider (crate `alpm`; ALPM handles never leave the adapter)
+- `omnibus-contracts/src/spi/packages.rs` - the `PackageManager` trait; package DTOs in `omnibus-contracts/src/dto/packages.rs`, capability constants in `omnibus-contracts/src/capabilities.rs`
+- `omnibus-adapter-alpm/src/` - Arch/Manjaro provider (crate `alpm`; ALPM handles never leave the adapter)
 - `omnibus-adapter-apt/src/` (planned) - Debian/Ubuntu/Mint provider (backend choice: libapt vs CLI, ADR-002)
 - `omnibus-adapter-dnf/src/` (planned) - Fedora provider
 - `omnibus-adapter-brew/src/` (planned) - macOS provider (MS3): formula + cask; `mas` as the optional App Store backend
@@ -35,7 +35,7 @@ Trait `PackageManager` operations: `list`, `info`, `search`, `install`, `remove`
 
 - `history` always reads the provider's own transaction log: the pacman log for alpm, `/var/log/apt/history.log` for apt.
 - An undo attempt where `pkg.undo=none` returns `CapabilityRequired` with a hint - never a failure in the middle of a transaction.
-- On alpm, a version missing from the cache yields `NativeFailure` with an explanation; the pointer to ALA/AUR Archive lives in knowledge-base articles, not in adapter code (P7).
+- On alpm, a version missing from the cache yields `NativeFailure` (`undo-no-cache-version`); the payload names the ALA/AUR archive, and the actionable treatment — which article, which URL — lives in knowledge-base articles (P7).
 - apt transactions always run without interactive input (non-tty CLI flags are pinned by tests).
 - On macOS, formula and cask share one contract (the package type is a DTO field); without `mas`, App Store packages drop out of `search` while everything else keeps working.
 - A provider swap (dnf to dnf5) changes neither trait signatures nor capability constants.

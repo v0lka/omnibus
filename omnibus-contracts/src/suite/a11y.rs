@@ -11,6 +11,11 @@ use super::{SuiteReport, check_report_shape};
 pub struct A11yFixture {
     /// The application the backend is configured with.
     pub app: String,
+    /// Pid disambiguating `app` when several live instances share the name;
+    /// `None` keeps the name-only selector (fine for fakes and single-instance
+    /// backends). The live binder fills this from `discover_apps` so the
+    /// suite cannot trip the ambiguity error an honest backend must raise.
+    pub pid: Option<u32>,
     /// A node reference that resolves.
     pub live_ref: String,
     /// A node reference that must yield `ElementStale`.
@@ -25,6 +30,7 @@ impl Default for A11yFixture {
     fn default() -> Self {
         Self {
             app: String::from("omnibus-suite-app"),
+            pid: None,
             live_ref: String::from("app#1/button#1"),
             stale_ref: String::from("app#gone"),
             poison_app: String::from("omnibus-suite-poison"),
@@ -48,16 +54,16 @@ where
     let tree = a
         .tree(TreeSelector {
             app: fx.app.clone(),
-            pid: None,
+            pid: fx.pid,
         })
         .await;
     if let Ok(t) = tree {
         out.check("tree returns the requested app", t.app == fx.app);
         out.check("tree counts nodes", t.node_count >= 1);
-        out.check(
-            "tree root names the app",
-            t.root.name.contains(&fx.app) || !t.root.name.is_empty(),
-        );
+        // The label is the contract: the root must actually name the requested
+        // app (the atspi binder derives fx.app from the same Name property the
+        // tree root reports, so this holds for an honest backend).
+        out.check("tree root names the app", t.root.name.contains(&fx.app));
         let element = a.element(t.root.node_ref.clone()).await;
         out.check("element resolves a live ref", element.is_ok());
     } else {

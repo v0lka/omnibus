@@ -53,8 +53,8 @@ omnibusd (omnibus-core) — единый MCP-фасад (stdio; инстанс =
 | Arch | alpm — `pkg.undo`: downgrade из кэша | persistent из коробки | **T1** |
 | Manjaro | alpm (задержанные репы, mhwd/pamac) | persistent ⚠M0 | **T1** |
 | Debian trixie / bookworm / bullseye | apt (**undo нет**) | дефолт; включает doctor | **T2 / T2 / T3** |
-| Ubuntu LTS | apt (**undo нет**); NM за netplan | volatile по умолчанию; включает doctor | **T2** |
-| Mint | apt (**undo нет**) | volatile (унаследовано от Ubuntu) | **T2** |
+| Ubuntu LTS | apt (**undo нет**); NM за netplan | persistent journald — факт машины (M0, табл. 1); включает doctor при volatile | **T2** |
+| Mint | apt (**undo нет**) | persistent journald — факт машины (наследует дефолт Ubuntu, M0 табл. 1) | **T2** |
 | Fedora | dnf — `pkg.undo`: transactional | дефолт ⚠M0 | **T2** |
 | macOS 14+ | brew + mas | unifiedlog | **T2** |
 
@@ -69,13 +69,13 @@ Version floors: **systemd ≥ 252** (bookworm — на полу; bullseye = 247,
 Имена и привязка к capabilities — по §5 архитектуры; «[+scope]» = требуется write-скоуп из `/etc/omnibus/scopes.d/*.toml` (пример манифеста — §3.3 архитектуры).
 
 - **desktop**: `desktop.tree`, `desktop.element` (адресация role+name, не пиксели), `desktop.set_value` [+scope], `desktop.invoke` [+scope]
-- **порталы**: `clip_read` (wl-clipboard/xclip — авто-детект), `clip_write` [+scope `clip.write`], `screenshot` (portal/X11; ScreenCaptureKit на macOS), `notify` [+scope `notify.send`]
-- **system**: `svc_list` / `svc_status`, `svc_start` / `svc_stop` [+scope], `net_status` (NM read-only «когда есть»; за netplan/networkd — скрыт), `journal_query` (прошлые загрузки — при `journal.prev_boot`: факт прошлых загрузок, независим от `journal.persistent`; Arch — persistent из коробки; Ubuntu/Mint — opt-in персистентности через doctor, затем перезагрузка)
+- **порталы**: `clip_read` (портал; авто-детект wl-clipboard/xclip — план), `clip_write` [+scope], `screenshot` (портал; ScreenCaptureKit на macOS), `notify` [+scope]
+- **system**: `svc_list` / `svc_status`, `svc_start` / `svc_stop` [+scope], `net_status` (NM read-only «когда есть»; за netplan/networkd — скрыт), `journal_query` (прошлые загрузки — при `journal.prev_boot`: факт прошлых загрузок, независим от `journal.persistent`; Arch — persistent из коробки; на машинах с volatile-конфигом (любая семья) — opt-in персистентности через doctor, затем перезагрузка)
 - **packages**: `pkg_list` / `pkg_info`, `pkg_install` / `pkg_remove` [+scope], `pkg_undo` [+scope; скрыт при `pkg.undo=none`]; откат — только при `pkg.undo` (alpm: downgrade из кэша; dnf: transactional; **у apt нет транзакционного undo** — инструмент честно не обещает откат)
 - **files**: `fs_list` / `fs_read` (дефолтный read-скоуп на Linux — $HOME целиком; за пределами $HOME — по явному скоупу; на macOS — TCC-гранты), `fs_write` [+scope]
 - **knowledge**: `wiki_search` / `wiki_page` (kb-archwiki на Arch/Manjaro; дистро-доки и kb-guides — на остальных платформах)
 - **intents (macOS, MS3)**: `intent_list`, `intent_run` [+scope] — Shortcuts/App Intents (cooperating-приложения; скрыты, пока probe не отчитается о наличии actions)
-- **meta**: `capabilities()` (единственный источник истины), `session_info`, `doctor` (ядро; оркеструет probe, журнал, сервисы и базу знаний; через MCP — только диагноз и copy-paste-ремедиация, мутации системы — только в CLI-режиме `omnibus doctor` при исполнении человеком; ведёт через opt-in: персистентность journald, a11y-флаги Electron, TCC-гранты macOS)
+- **meta**: `capabilities()` (единственный источник истины), `session_info`, `doctor` (ядро; оркеструет probe, журнал, сервисы и базу знаний; через MCP — только диагноз и copy-paste-ремедиация, мутации системы — только в CLI-режиме `omnibusd doctor` при исполнении человеком; ведёт через opt-in: персистентность journald, a11y-флаги Electron, TCC-гранты macOS)
 
 ## 5. Roadmap
 
@@ -86,11 +86,11 @@ Version floors: **systemd ≥ 252** (bookworm — на полу; bullseye = 247,
 
 ## 6. Риски
 
-Electron-приложения без a11y-флага (нужен per-app enable); гонка с вендорскими серверами (RHEL Lightspeed уже движется — но их фокус SSH/админ, не десктоп; Apple строит канал для Siri, а не для «bring your own agent»); фрагментация дефолтов дистрибутивов (volatile journald на Ubuntu/Mint — диагностика прошлых загрузок только после opt-in через doctor); TCC-трение macOS (права выдаёт человек через GUI, программно — только MDM/PPPC; Screen Recording в 15+ пере-подтверждается ежемесячно); QA-матрица 7 платформ × DE × X11/Wayland — закрывается tier-моделью (T1 — полный CI, T2 — smoke на эталонных версиях, T3 — community); скриншот на Linux гейтится только порталом DE (Wayland) или ничем (X11) — принятый риск v1 для read-операции (на macOS — TCC).
+Electron-приложения без a11y-флага (нужен per-app enable); гонка с вендорскими серверами (RHEL Lightspeed уже движется — но их фокус SSH/админ, не десктоп; Apple строит канал для Siri, а не для «bring your own agent»); фрагментация дефолтов дистрибутивов (persistent journald — факт конкретной машины, пробится зондом; диагностика прошлых загрузок только после opt-in через doctor на машинах с volatile-конфигом); TCC-трение macOS (права выдаёт человек через GUI, программно — только MDM/PPPC; Screen Recording в 15+ пере-подтверждается ежемесячно); QA-матрица 7 платформ × DE × X11/Wayland — закрывается tier-моделью (T1 — полный CI, T2 — smoke на эталонных версиях, T3 — community); скриншот на Linux гейтится только порталом DE (Wayland) или ничем (X11) — принятый риск v1 для read-операции (на macOS — TCC).
 
 ## 7. Сознательно не строим
 
-Ядра ОС (Linux и macOS), fork компоситора, consent-брокер с UI — никогда (согласие принимается только вне контура агента: TOML-конфиг, `omnibus grant`, `omnibus doctor` (CLI — исполняет человек; doctor через MCP мутировать не может); in-band «пользователь подтвердил» от агента неотличим от подделки — см. §7.4 архитектуры), собственный формат плагинов (MCP есть стандарт — не изобретаем), сетевые write-действия (NM read-only; смена сетевого бэкенда и бэкпорты systemd — никогда, §7.4 архитектуры), модельные вызовы из omnibusd — никогда (инференс целиком в контуре агента юзера; local-ML в будущем — максимум embeddings для поиска, опциональным адаптером, не ядром), событийный канал a11y (и push, и буферизованный поллинг) — вне v1: наблюдение UI = опрос `desktop.tree`, watch-сценарии = `journal_query`/`svc_status`; вернётся аддитивно при первом сценарии, которому опроса мало (push зависит от разнородной поддержки подписок в MCP-клиентах), постоянный демон, admin-канал и HTTP-транспорт — вне v1 (stdio-child покрывает целевые сценарии; пересмотр — при серверных/headless-профилях).
+Ядра ОС (Linux и macOS), fork компоситора, consent-брокер с UI — никогда (согласие принимается только вне контура агента: TOML-конфиг, `omnibusd grant`, `omnibusd doctor` (CLI — исполняет человек; doctor через MCP мутировать не может); in-band «пользователь подтвердил» от агента неотличим от подделки — см. §7.4 архитектуры), собственный формат плагинов (MCP есть стандарт — не изобретаем), сетевые write-действия (NM read-only; смена сетевого бэкенда и бэкпорты systemd — никогда, §7.4 архитектуры), модельные вызовы из omnibusd — никогда (инференс целиком в контуре агента юзера; local-ML в будущем — максимум embeddings для поиска, опциональным адаптером, не ядром), событийный канал a11y (и push, и буферизованный поллинг) — вне v1: наблюдение UI = опрос `desktop.tree`, watch-сценарии = `journal_query`/`svc_status`; вернётся аддитивно при первом сценарии, которому опроса мало (push зависит от разнородной поддержки подписок в MCP-клиентах), постоянный демон, admin-канал и HTTP-транспорт — вне v1 (stdio-child покрывает целевые сценарии; пересмотр — при серверных/headless-профилях).
 
 ## Приложение: общая карта контекста
 

@@ -6,7 +6,7 @@
 //! the struct — one source of truth, no second hand-written copy to drift. The
 //! round-trip guard in `tests/schema.rs` builds a sample value from every schema and
 //! serde-deserializes it back into the DTO: a schema that disagrees with serde fails
-//! the build (the "расхождение = ошибка компиляции/теста" requirement).
+//! the test run (the "mismatch = compile/test error" requirement).
 
 /// Scalar leaf types expressible in tool arguments and DTO fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,12 +157,16 @@ pub fn json_schema(node: &SchemaNode) -> serde_json::Value {
         }
         SchemaNode::Enum(variants) => serde_json::json!({ "enum": variants }),
         SchemaNode::Optional(inner) => {
-            let mut base = json_schema(inner);
-            if let Some(obj) = base.as_object_mut() {
-                obj.remove("required");
-                obj.remove("additionalProperties");
-            }
-            base
+            // serde maps an explicit JSON null on an Option<T> field to None, so
+            // the rendered schema must accept null too — otherwise tools/list
+            // clients reject calls serde would serve. The inner schema stays
+            // intact: when the field IS present with a value, serde still
+            // enforces the value's own shape — a nested struct's required
+            // fields stay required and unknown properties stay rejected.
+            // Stripping them here would render a schema looser than serde,
+            // accepting calls the round-trip would reject.
+            let base = json_schema(inner);
+            serde_json::json!({ "anyOf": [base, { "type": "null" }] })
         }
         SchemaNode::Any => serde_json::json!({}),
     }

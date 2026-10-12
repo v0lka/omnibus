@@ -13,10 +13,10 @@ payload for diagnosis.
 | `CapabilityRequired` | The tool exists but its capability is absent on this machine | hidden-tool direct call | doctor hint; the capability document explains |
 | `ScopeDenied` | Capability present, write grant missing or the path is outside granted scopes | any [+scope] tool without a grant | one-line copy-paste grant command |
 | `FloorUnsupported` | The platform is below the version floor | probe/enforcement (adapter not activated) | reason string, e.g. "systemd 247 < 252" |
-| `AdapterUnavailable` | The subsystem has no active adapter | core registry | `capabilities()` names the gap |
+| `AdapterUnavailable` | The subsystem has no active adapter | core registry | the absent entry in `capabilities()` marks the gap; `doctor` names it |
 | `NativeFailure{code}` | The OS backend failed; code + preserved payload | any adapter call | payload message for diagnosis |
 | `ElementStale` | The referenced UI element no longer exists (UI changed) | `DesktopA11y` | re-read `desktop.tree` |
-| `TimeoutError` | Budget exhausted (after the single read retry; writes are never retried) | core policy | adjust or abandon; limits visible via `capabilities()` |
+| `TimeoutError` | Budget exhausted (after the single read retry; writes are never retried) | core policy | adjust or abandon; limits visible via `session_info` |
 | `Unsupported{reason}` | Operation is structurally impossible on this backend | example: `Filter{unit}` on unifiedlog | reason names alternatives (severity/window/process) |
 
 ## Mapping Rules
@@ -25,6 +25,10 @@ payload for diagnosis.
   boundary.
 - D-Bus, ALPM, AX, and shell error codes become `NativeFailure{code}` inside the adapter; the payload
   preserves the original human-readable message.
+- `NativeFailure.code` is adapter-scoped — there is no global code registry: an adapter may
+  synthesize codes for conditions with no errno (negative or high values are free for that), and
+  code values are not comparable across adapters; the payload's symbolic prefix is the portable
+  part.
 - Authorization failures of the OS (polkit, launchd domains) surface as `NativeFailure` with an honest
   human-readable hint - Omnibus never intercepts system authorization.
 - A hidden tool called by name returns `CapabilityRequired` (never "method not found"), so the agent

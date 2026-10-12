@@ -13,8 +13,9 @@ omnibus-contracts = { path = "../omnibus-contracts" }
 async-trait = "0.1"
 serde_json = "1"
 # rt: spawn_blocking + the test runtime; process: journalctl subprocesses;
-# time: the per-call budget; sync: unused today, kept off until needed.
-tokio = { version = "1", features = ["rt", "process", "time"] }
+# time: the per-call budget; io-util: the bounded stdout/stderr pipe reads;
+# sync: unused today, kept off until needed.
+tokio = { version = "1", features = ["rt", "process", "time", "io-util"] }
 
 [dev-dependencies]
 # Feature sets are additive across dependency groups: tests additionally need

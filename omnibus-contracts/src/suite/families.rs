@@ -13,12 +13,6 @@ pub const SENTINEL_POISON: &str = "omnibus-suite-poison";
 pub const SENTINEL_MISSING: &str = "omnibus-suite-missing";
 pub const SENTINEL_SLOW: &str = "omnibus-suite-slow";
 
-/// Asserts `result` is either Ok or the expected contract error class; contract
-/// errors are the only legal error shape at the seam.
-pub fn expect_contract_error<T>(result: Result<T, ContractError>) -> bool {
-    result.is_err()
-}
-
 pub mod services {
     //! ServiceManager suite.
 
@@ -26,12 +20,17 @@ pub mod services {
     use crate::dto::services::{ServiceAction, ServiceActionRequest, ServiceFilter, ServiceUnit};
     use crate::spi::services::ServiceManager;
 
+    /// The backend state the implementation was configured with. The
+    /// fixture-free [`services_suite`] cannot verify a known unit; binders that
+    /// configure one must bind [`services_suite_with_fixture`].
     #[derive(Debug, Clone, Default)]
     pub struct ServicesFixture {
+        /// A unit the backend reports as present: `status` must answer Ok,
+        /// name the unit, and carry an active state.
         pub known_unit: String,
     }
 
-    pub async fn services_suite<F>(make: F) -> SuiteReport
+    async fn services_core<F>(make: &F) -> SuiteReport
     where
         F: Fn() -> Box<dyn ServiceManager> + Send + Sync,
     {
@@ -90,6 +89,169 @@ pub mod services {
         );
         drop(s);
         out
+    }
+
+    /// Runs the fixture-free `ServiceManager` behavioral set against `make`.
+    ///
+    /// Fixture-free by signature and by honesty: no unit name exists on every
+    /// machine, so this entry point cannot gate a known unit. Binders that
+    /// configure the state the fixture prescribes must bind
+    /// [`services_suite_with_fixture`], which gates it for real.
+    pub async fn services_suite<F>(make: F) -> SuiteReport
+    where
+        F: Fn() -> Box<dyn ServiceManager> + Send + Sync,
+    {
+        services_core(&make).await
+    }
+
+    /// [`services_suite`] plus the fixture gate: `status` of the declared known
+    /// unit answers Ok, names the unit, and carries an active state. A fixture
+    /// without a known unit fails loudly instead of silently skipping the gate.
+    pub async fn services_suite_with_fixture<F>(make: F, fx: ServicesFixture) -> SuiteReport
+    where
+        F: Fn() -> Box<dyn ServiceManager> + Send + Sync,
+    {
+        let mut out = services_core(&make).await;
+        if fx.known_unit.is_empty() {
+            out.check("fixture declares a known unit", false);
+            return out;
+        }
+        let s = make();
+        let status = s.status(fx.known_unit.clone()).await;
+        match status {
+            Ok(st) => {
+                out.check(
+                    "known unit status names the unit",
+                    st.unit.name == fx.known_unit,
+                );
+                out.check(
+                    "known unit carries an active state",
+                    !st.unit.active_state.is_empty(),
+                );
+            }
+            Err(e) => out.failed.push(format!("  known unit status failed: {e}")),
+        }
+        drop(s);
+        out
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::dto::probe::AdapterReport;
+        use crate::dto::services::{ServiceActionResult, ServiceStatus};
+
+        struct FakeServices;
+
+        fn unit(name: &str) -> ServiceUnit {
+            ServiceUnit {
+                name: String::from(name),
+                unit_type: String::from("service"),
+                description: String::from("suite fake"),
+                active_state: String::from("active"),
+                sub_state: String::from("running"),
+                enabled: Some(true),
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl ServiceManager for FakeServices {
+            fn report(&self) -> AdapterReport {
+                AdapterReport {
+                    adapter: String::from("fake-services"),
+                    subsystem: String::from("services"),
+                    contract_version: String::from(crate::version::CONTRACT_VERSION),
+                    capabilities: vec![],
+                    notes: vec![],
+                }
+            }
+            async fn list(
+                &self,
+                _filter: ServiceFilter,
+            ) -> Result<Vec<ServiceUnit>, ContractError> {
+                Ok(vec![unit("suite-known.service")])
+            }
+            async fn status(&self, name: String) -> Result<ServiceStatus, ContractError> {
+                if name == "suite-known.service" {
+                    Ok(ServiceStatus {
+                        unit: unit(&name),
+                        main_pid: Some(1),
+                        since_epoch_ms: None,
+                        docs: vec![],
+                    })
+                } else if name == format!("{SENTINEL_SLOW}.service") {
+                    Err(ContractError::TimeoutError)
+                } else {
+                    Err(ContractError::NativeFailure {
+                        code: 1,
+                        payload: String::from("no such unit"),
+                    })
+                }
+            }
+            async fn apply(
+                &self,
+                _request: ServiceActionRequest,
+            ) -> Result<ServiceActionResult, ContractError> {
+                Err(ContractError::ScopeDenied)
+            }
+        }
+
+        #[tokio::test]
+        async fn fixture_suite_gates_the_known_unit() {
+            let fx = ServicesFixture {
+                known_unit: String::from("suite-known.service"),
+            };
+            let report = services_suite_with_fixture(
+                || Box::new(FakeServices) as Box<dyn ServiceManager>,
+                fx,
+            )
+            .await;
+            assert!(report.is_clean(), "{report}");
+        }
+
+        #[tokio::test]
+        async fn fixture_suite_fails_when_the_known_unit_is_missing() {
+            struct NoKnownUnit;
+            #[async_trait::async_trait]
+            impl ServiceManager for NoKnownUnit {
+                fn report(&self) -> AdapterReport {
+                    AdapterReport {
+                        adapter: String::from("fake-services-broken"),
+                        subsystem: String::from("services"),
+                        contract_version: String::from(crate::version::CONTRACT_VERSION),
+                        capabilities: vec![],
+                        notes: vec![],
+                    }
+                }
+                async fn list(
+                    &self,
+                    _filter: ServiceFilter,
+                ) -> Result<Vec<ServiceUnit>, ContractError> {
+                    Ok(vec![])
+                }
+                async fn status(&self, _name: String) -> Result<ServiceStatus, ContractError> {
+                    Err(ContractError::NativeFailure {
+                        code: 1,
+                        payload: String::from("no such unit"),
+                    })
+                }
+                async fn apply(
+                    &self,
+                    _request: ServiceActionRequest,
+                ) -> Result<ServiceActionResult, ContractError> {
+                    Err(ContractError::ScopeDenied)
+                }
+            }
+            let fx = ServicesFixture {
+                known_unit: String::from("suite-known.service"),
+            };
+            let report = services_suite_with_fixture(
+                || Box::new(NoKnownUnit) as Box<dyn ServiceManager>,
+                fx,
+            )
+            .await;
+            assert!(!report.is_clean(), "{report}");
+        }
     }
 }
 
@@ -240,6 +402,22 @@ pub mod portals {
                 ),
                 Err(e) => out.failed.push(format!("  screenshot failed: {e}")),
             }
+        } else {
+            // The fixture's `false` covers two honest degradations: no portal
+            // screenshot interface (AdapterUnavailable) and an interface present
+            // but refusing unattended capture (interactive consent). Both must
+            // answer with a typed contract error — a fake Ok with empty bytes
+            // must fail here. (AdapterUnavailable cannot be demanded: the same
+            // fixture flag also covers the consent case.)
+            let shot = s
+                .screenshot(ScreenshotRequest {
+                    format: crate::dto::portals::ImageFormat::Png,
+                })
+                .await;
+            out.check(
+                "absent screenshot backend answers with a contract error, not a fake capture",
+                shot.is_err(),
+            );
         }
         drop(s);
         out
@@ -381,17 +559,21 @@ pub mod files {
     {
         let mut out = SuiteReport::default();
         let f = make();
+        let expected_bytes = u64::try_from(payload.len()).unwrap_or(u64::MAX);
         let written = f
             .write(FileWriteRequest {
                 path: target.clone(),
                 data_base64: None,
-                text: Some(payload),
+                text: Some(payload.clone()),
                 create_parents: Some(false),
             })
             .await;
         match written {
             Ok(r) => {
-                out.check("write reports byte count", r.bytes_written > 0);
+                out.check(
+                    "write reports the exact byte count",
+                    r.bytes_written == expected_bytes,
+                );
                 let read = f
                     .read(FileReadRequest {
                         path: target,
@@ -399,7 +581,15 @@ pub mod files {
                         max_bytes: None,
                     })
                     .await;
-                out.check("written content reads back", read.is_ok());
+                match read {
+                    Ok(content) => out.check(
+                        "written content reads back byte-for-byte",
+                        content.text.as_deref() == Some(payload.as_str()),
+                    ),
+                    Err(e) => out
+                        .failed
+                        .push(format!("  written content did not read back: {e}")),
+                }
             }
             Err(ContractError::ScopeDenied) => {
                 out.check("write outside scope denied", true);
@@ -445,6 +635,21 @@ pub mod kb {
         match found {
             Ok(refs) => {
                 out.check("search finds the known fix", !refs.is_empty());
+                // The fixture prescribes a state (binders populate
+                // expected_title_fragment); the gate must verify it. Match
+                // case-insensitively: a live title may capitalize the fragment.
+                if fx.expected_title_fragment.is_empty() {
+                    out.check("fixture declares an expected title fragment", false);
+                } else {
+                    out.check(
+                        "search returns the fixture's expected article",
+                        refs.iter().any(|r| {
+                            r.title
+                                .to_lowercase()
+                                .contains(&fx.expected_title_fragment.to_lowercase())
+                        }),
+                    );
+                }
                 out.check(
                     "refs name their source",
                     refs.iter().all(|r| !r.source.is_empty()),

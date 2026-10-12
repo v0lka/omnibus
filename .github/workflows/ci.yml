@@ -8,19 +8,23 @@
 #                      check: a forbidden edge (adapter -> core) is injected into a
 #                      scratch clone in /tmp and the lint must turn red (the
 #                      "proven by a test PR" AC of 1.1.2/1.1.3, as an inline step).
-#   matrix-t1        — GNOME/KDE x X11/Wayland on Arch containers (1.8.2): Xvfb or
+#   matrix-t1        — X11/Wayland on Arch containers (1.8.2): Xvfb or
 #                      a headless Wayland compositor, best-effort (a missing
 #                      compositor never fails the job; a test failure always does),
 #                      then cargo test + the three smoke demos (ci/smoke/).
+#                      No desktop-session (GNOME/KDE) axis on purpose: no step
+#                      consumes it yet, so the axis would only double the legs
+#                      byte-identically (R7) — introduce it together with the
+#                      first step that actually branches on the session type.
 #                      The Manjaro side of the matrix is owned by manjaro.yml and
-#                      the run-on-hardware legs by the planned acceptance runbook
-#                      (docs/verification/ms1-ms2-manjaro-acceptance.md, to land
-#                      with the true-VM work of task 2.4.1).
+#                      the run-on-hardware legs by the acceptance runbook
+#                      (docs/verification/ms1-ms2-manjaro-acceptance.md).
 #   coverage         — cargo-llvm-cov line-coverage floor of 75%.
 #   package-build    — honest packaging validation on an Arch container: PKGBUILD
-#                      syntax/parse checks when packaging/ exists (a plain container
-#                      cannot run a full `makepkg -f` build honestly) + a release
-#                      build of the workspace.
+#                      bash syntax, makepkg's own parse (--printsrcinfo), and
+#                      structural checks that package() installs exactly the
+#                      artifact paths build() produces (when packaging/ exists)
+#                      + a release build of the workspace.
 #
 # A red gate has no override (Makefile note): every job below must stay green
 # on main; pulls run the same commands.
@@ -145,18 +149,20 @@ jobs:
           echo "negative check OK: the forbidden edge is red (R4-EDGES), the direction is enforced"
 
   matrix-t1:
-    name: T1 matrix ${{ matrix.de }} / ${{ matrix.session }} (Arch container)
+    name: T1 matrix ${{ matrix.session }} (Arch container)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        de: [gnome, kde]
+        # Single axis on purpose: no step branches on the desktop session
+        # type (GNOME vs KDE would be byte-identical container legs — see
+        # the job-map header). Reintroduce a `de` axis only with the first
+        # step that actually consumes it.
         session: [x11, wayland]
     container:
       image: archlinux:base-devel
     env:
-      DE: ${{ matrix.de }}
       SESSION: ${{ matrix.session }}
     steps:
       - uses: actions/checkout@v4
@@ -164,7 +170,13 @@ jobs:
       - name: Install toolchain and session dependencies (pacman)
         run: |
           set -euo pipefail
-          pacman -Syu --noconfirm --needed git rust at-spi2-core xvfb
+          # python: the smoke demos drive the MCP client through `python3 -`
+          # heredocs (ci/smoke/mcp_client.py); without it every demo leg dies
+          # with exit 127 before asserting anything.
+          # xorg-server-xvfb: the Xvfb binary's actual Arch package (plain
+          # "xvfb" does not exist in the repos and would abort the install
+          # step — and with it both matrix legs — under set -e).
+          pacman -Syu --noconfirm --needed git rust python at-spi2-core xorg-server-xvfb
           # X11 legs get Xvfb + a window manager; Wayland legs get Weston's
           # headless backend. Both are best-effort (see the next step).
           if [ "$SESSION" = "x11" ]; then
@@ -180,6 +192,10 @@ jobs:
           export XDG_RUNTIME_DIR=/tmp/xdg-runtime
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 0700 "$XDG_RUNTIME_DIR"
+          # Persisted so the later daemon launches (cargo test, smoke demos)
+          # resolve the cross-process write-gate lock path and exercise the
+          # flock half of the gate, not only its process-only degradation.
+          echo "XDG_RUNTIME_DIR=/tmp/xdg-runtime" >> "$GITHUB_ENV"
           if [ "$SESSION" = "x11" ]; then
             Xvfb :99 -screen 0 1280x800x24 -nolisten tcp &
             sleep 2
@@ -190,7 +206,7 @@ jobs:
             sleep 2
             echo "WAYLAND_DISPLAY=wayland-0" >> "$GITHUB_ENV"
           fi
-          echo "session leg: $DE / $SESSION (headless in container)"
+          echo "session leg: $SESSION (headless in container)"
 
       - name: Test the whole workspace
         run: cargo test --workspace
@@ -236,13 +252,28 @@ jobs:
           # A plain container cannot run a full `makepkg -f` honestly (it would
           # fetch sources and install makedepends for a package that is not
           # defined yet). What a container CAN validate without lying:
-          # PKGBUILD bash syntax and makepkg's own parse of the build recipe.
+          #   1. PKGBUILD bash syntax;
+          #   2. makepkg's own parse of the recipe (--printsrcinfo);
+          #   3. structural package()-path consistency: package() must install
+          #      exactly the artifact paths build() produces, and the source
+          #      files it reads must exist relative to the PKGBUILD. This is
+          #      the class of breakage a pure syntax check cannot see (e.g. a
+          #      binary path pointing at packaging/target instead of the
+          #      workspace-root target/).
           # The real package build is the AUR/release channel's job (roadmap
           # 1.8.1 / 2.6.1).
           if [ -f packaging/PKGBUILD ]; then
             bash -n packaging/PKGBUILD
-            ( cd packaging && makepkg --printsrcpath )
-            echo "packaging: PKGBUILD syntax and parse checks passed"
+            ( cd packaging && makepkg --printsrcinfo > /dev/null )
+            grep -Fq 'cd "$startdir/.."' packaging/PKGBUILD \
+              || { echo "::error::build() must compile the workspace root: cd \"\$startdir/..\" (cargo's upward search from packaging/ otherwise hides where the artifacts land)"; exit 1; }
+            grep -Fq '$startdir/../target/release/omnibusd' packaging/PKGBUILD \
+              || { echo "::error::package() must install the workspace-root artifact \$startdir/../target/release/omnibusd"; exit 1; }
+            ls packaging/scopes.d/*.toml > /dev/null \
+              || { echo "::error::packaging/scopes.d/*.toml missing — package() installs them verbatim"; exit 1; }
+            grep -Fq '$startdir"/scopes.d/*.toml' packaging/PKGBUILD \
+              || { echo "::error::package() must install \$startdir/scopes.d/*.toml (the templates next to this PKGBUILD)"; exit 1; }
+            echo "packaging: PKGBUILD syntax, parse and package()-path checks passed"
           else
             echo "SKIP: packaging/PKGBUILD not present yet (lands with roadmap task 2.4.1 packaging work); nothing to lint"
           fi

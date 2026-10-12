@@ -14,6 +14,8 @@ async-trait = "0.1"
 # System-bus D-Bus client; the tokio runtime integration, no blocking API.
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 serde = "1"
+# StreamExt for the JobRemoved signal stream (zbus does not re-export one).
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # Call-level budgets (TimeoutError mapping) around D-Bus round trips.
 tokio = { version = "1", features = ["time"] }
 

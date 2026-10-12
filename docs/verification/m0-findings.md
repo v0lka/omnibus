@@ -114,16 +114,29 @@ Distro-level at-spi2-core versions collected for the floor analysis (retrieved 2
    `docs/development/omnibus-architecture.md` §6 rows for Ubuntu/Mint). The evidence above shows the
    opposite for Ubuntu/Mint: persistent since Ubuntu 18.04 (postinst, LP #1618188), inherited by
    Mint 22.x. **Volatility is no longer a distro default anywhere in the supported matrix.**
-2. **Current code matches the old premise, not the measured facts.** `omnibus-core/src/doctor.rs`
-   (journal-persistence finding, family check at the `DistroFamily::Ubuntu | DistroFamily::Mint`
-   match, command push beneath it) emits the "enable journal persistence" command only for the
-   Ubuntu/Mint families — i.e. the command is wired to fire exactly where fresh installs are
-   persistent, so on default installs it will effectively never fire. On volatile machines created
-   by local admin choice (any family) it will not fire at all. Suggested follow-up (roadmap AC
-   "confirmed or corrected"): drive the suggestion off the probe fact
-   (`journal.persistent == false`), not off the distro family, and update the spec §5 / arch §6 rows
-   at the next minor revision. **No code or spec files were changed by this document** (scope of
-   task 1.1.1 is the findings table).
+   **Resolved in the working tree (2026-10-12):** the omnibus-spec §2 rows, the omnibus-architecture
+   §6 rows, roadmap 2.5.1, and the derived specs (platform-matrix, journal, doctor, principles,
+   capability-model) now use the per-machine model; remaining per-distro residue in §4/§7.4 and
+   journal.md cleaned in the same pass.
+2. **The doctor is already fact-driven — the code was corrected after this document was written.**
+   `omnibus-core/src/doctor.rs` (journal-persistence finding) judges persistence by the probe fact,
+   not by distro family: the journal-specific storage suggestion fires only when the
+   `journal.persistent` capability entry is absent from the capabilities document (i.e. the journald
+   adapter is inactive — e.g. no journalctl); a volatile machine with an active adapter reports the
+   entry as `opt-in-required` and is served by the generic opt-in grant suggestion
+   (`omnibusd grant journal.persistent`) instead. (The doctor.rs comment quoting "a
+   volatile-configured machine of any family gets the same honest suggestion" for the None branch
+   overstated its trigger and was corrected in the same working tree.) An earlier revision
+   of this item described a family check at `DistroFamily::Ubuntu | DistroFamily::Mint`; that
+   description no longer matches the shipped code and is superseded here. The follow-up recorded at
+   the time of writing (the spec rows then carried the outdated "Ubuntu LTS: volatile by default" /
+   "Mint: volatile (inherited from Ubuntu)" wording) is **resolved in the working tree (2026-10-12)**:
+   the omnibus-spec §2 rows and the arch §6 rows now carry the per-machine wording — nothing remains
+   open under the roadmap AC "confirmed or corrected". **No spec files were changed by this
+   document** (scope of
+   task 1.1.1 is the findings table; the spec rows were updated by the separate per-machine-model
+   pass recorded in item 1, and the doctor.rs fact-driven rewrite is part of the later code
+   that implements it).
 3. **`journal.prev_boot` becomes a T1-grade capability almost everywhere.** With all six defaults
    persistent, past-boot diagnostics (`journalctl --list-boots`, 7 boots on the reference machine)
    work out of the box on Manjaro, Debian 11–13, Fedora, Ubuntu 24.04/26.04 and Mint 22.x; the

@@ -11,9 +11,9 @@ use std::time::Duration;
 
 use common::{FakeJournal, FakePackages, args, met_floor, pipeline_for, platform};
 use omnibus_contracts::capabilities as cap;
+use omnibus_contracts::dto::desktop::{A11yElement, WriteOutcome};
 use omnibus_contracts::errors::ContractError;
 use omnibus_core::audit::FileSink;
-use omnibus_core::audit::params_hash;
 use omnibus_core::error_map::join_tool;
 use omnibus_core::grants::{Grant, GrantProvenance, GrantRegistry};
 use omnibus_core::registry::Registry;
@@ -77,11 +77,15 @@ async fn read_timeout_retries_once_then_times_out() {
     assert_eq!(events[0].tool, "journal_query");
 }
 
-/// AC 1.3.2: a write past its budget is never retried — exactly one adapter call.
-#[tokio::test(start_paused = true)]
-async fn write_timeout_is_never_retried() {
+/// AC 1.3.2: a write is never retried — exactly one adapter call — and the
+/// write's own error surfaces untouched and audited. The write's only
+/// timeout layer is its adapter budget (`tools::dispatch` never timers
+/// writes), so the honest indeterminate outcome — not a bare core
+/// `TimeoutError` — is what the agent and the audit see.
+#[tokio::test]
+async fn write_error_is_never_retried() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let packages = FakePackages::new(pkg_report(), Duration::from_secs(11));
+    let packages = FakePackages::failing_install(pkg_report());
     let registry = Registry {
         packages: Some(packages.clone()),
         ..Registry::default()
@@ -96,7 +100,10 @@ async fn write_timeout_is_never_retried() {
     );
 
     let outcome = tools::dispatch(&core, "pkg_install", args(&[("name", "demo".into())])).await;
-    assert!(matches!(outcome, Err(ContractError::TimeoutError)));
+    assert!(
+        matches!(outcome, Err(ContractError::NativeFailure { code: -7, .. })),
+        "the adapter's indeterminate write outcome surfaces untouched"
+    );
     assert_eq!(
         packages
             .install_calls
@@ -106,7 +113,90 @@ async fn write_timeout_is_never_retried() {
     );
     let events = FileSink::new(dir.path().join("audit.jsonl")).read_all();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].result, "TimeoutError");
+    assert_eq!(events[0].result, "NativeFailure");
+}
+
+/// The prev-boot rung is enforced at the dispatch arm, not only in the
+/// helper's truth table: a volatile-journal fact set (`journal.prev_boot`
+/// `opt-in-required`, no grant) refuses `boot: previous` with
+/// `CapabilityRequired` before the adapter is reached, and the refusal is
+/// audited like every terminal outcome.
+#[tokio::test]
+async fn prev_boot_query_refused_until_persistent_granted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let facts = vec![
+        common::fact(cap::JOURNAL_QUERY, "present"),
+        common::fact(cap::JOURNAL_PERSISTENT, "opt-in-required"),
+        common::fact(cap::JOURNAL_PREV_BOOT, "opt-in-required"),
+    ];
+    let registry = Registry {
+        journal: Some(FakeJournal::new(facts)),
+        ..Registry::default()
+    };
+    let core = common::build_core(
+        registry,
+        GrantRegistry::new(),
+        ScopeManifests::default(),
+        pipeline_for(&common::session(7), &dir.path().join("audit.jsonl")),
+        platform(vec![met_floor("systemd", "261")]),
+        7,
+    );
+
+    let outcome = tools::dispatch(
+        &core,
+        "journal_query",
+        args(&[("boot", "previous".into()), ("limit", 5.into())]),
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(ContractError::CapabilityRequired)),
+        "an ungranted volatile prev_boot refuses with CapabilityRequired"
+    );
+    let events = FileSink::new(dir.path().join("audit.jsonl")).read_all();
+    assert_eq!(events.len(), 1, "the refusal is audited like every outcome");
+    assert_eq!(events[0].result, "CapabilityRequired");
+}
+
+/// The grant unlocks the rung: with `journal.persistent` issued, the same
+/// `boot: previous` query is dispatched to the adapter instead of refused.
+#[tokio::test]
+async fn prev_boot_query_runs_once_persistent_is_granted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let facts = vec![
+        common::fact(cap::JOURNAL_QUERY, "present"),
+        common::fact(cap::JOURNAL_PERSISTENT, "opt-in-required"),
+        common::fact(cap::JOURNAL_PREV_BOOT, "opt-in-required"),
+    ];
+    let journal = FakeJournal::new(facts);
+    let mut grants = GrantRegistry::new();
+    grants.issue(Grant::new(cap::JOURNAL_PERSISTENT, GrantProvenance::Cli));
+    let registry = Registry {
+        journal: Some(journal.clone()),
+        ..Registry::default()
+    };
+    let core = common::build_core(
+        registry,
+        grants,
+        ScopeManifests::default(),
+        pipeline_for(&common::session(8), &dir.path().join("audit.jsonl")),
+        platform(vec![met_floor("systemd", "261")]),
+        8,
+    );
+
+    let outcome = tools::dispatch(
+        &core,
+        "journal_query",
+        args(&[("boot", "previous".into()), ("limit", 5.into())]),
+    )
+    .await;
+    assert!(outcome.is_ok(), "the granted prev_boot query runs");
+    assert_eq!(
+        journal
+            .query_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the adapter was reached"
+    );
 }
 
 /// AC 1.3.2: two concurrent writes serialize through the gate (no overlap), both
@@ -162,12 +252,14 @@ async fn concurrent_writes_serialize_and_audit_records_acquisition_order() {
     assert_ne!(entered(&trace[0]), entered(&trace[2]), "both writers ran");
 
     // The audit events (written while each permit is held) follow the same
-    // acquisition order: identify writers by the hash of their arguments.
+    // acquisition order: identify writers by the keyed hash of their arguments.
     let events = FileSink::new(dir.path().join("audit.jsonl")).read_all();
     assert_eq!(events.len(), 2, "one audited write per dispatch");
     assert!(events.iter().all(|e| e.result == "ok"));
-    let hash_of =
-        |name: &str| params_hash(&serde_json::Value::Object(args(&[("name", name.into())])));
+    let hash_of = |name: &str| {
+        core.audit
+            .hash_params(&serde_json::Value::Object(args(&[("name", name.into())])))
+    };
     let first_writer = entered(&trace[0]);
     let second_writer = entered(&trace[2]);
     assert_eq!(events[0].params_hash, hash_of(first_writer));
@@ -288,4 +380,85 @@ fn adapter_slots_are_optional_by_type() {
     assert!(registry.journal.is_none(), "fresh registry: nothing served");
     assert!(registry.a11y.is_none());
     assert!(registry.packages.is_none());
+}
+
+/// The core always mints (dto/desktop.rs): `desktop.element` and the typed
+/// write outcomes surface core-minted element tokens — the raw adapter-owned
+/// node ref never reaches the MCP surface.
+#[tokio::test]
+async fn element_and_write_outcomes_surface_core_tokens_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let element = A11yElement {
+        node_ref: String::from("app#1/entry#1"),
+        role: String::from("entry"),
+        name: String::from("Name field"),
+        attributes: vec![],
+        states: vec![],
+        actions: vec![],
+        child_refs: vec![],
+    };
+    let mut grants = GrantRegistry::new();
+    grants.issue(Grant::new(cap::DESKTOP_WRITE_TYPED, GrantProvenance::Cli));
+    let core = common::build_core(
+        Registry {
+            a11y: Some(common::FakeA11y::with_writes(
+                vec![
+                    common::fact(cap::DESKTOP_TREE, "present"),
+                    common::fact(cap::DESKTOP_WRITE_TYPED, "present"),
+                ],
+                element,
+                WriteOutcome {
+                    node_ref: String::new(),
+                    applied: true,
+                },
+            )),
+            ..Registry::default()
+        },
+        grants,
+        ScopeManifests::default(),
+        pipeline_for(&common::session(9), &dir.path().join("audit.jsonl")),
+        platform(vec![]),
+        9,
+    );
+    let tree_tool = join_tool("desktop", "tree");
+    let element_tool = join_tool("desktop", "element");
+    let set_value_tool = join_tool("desktop", "set_value");
+
+    let tree = tools::dispatch(&core, &tree_tool, args(&[("app", "demo".into())]))
+        .await
+        .expect("tree dispatch");
+    let tree_token = tree.value["root"]["node_ref"]
+        .as_str()
+        .expect("minted token")
+        .to_string();
+
+    let element = tools::dispatch(
+        &core,
+        &element_tool,
+        args(&[("element_id", tree_token.clone().into())]),
+    )
+    .await
+    .expect("element dispatch");
+    let surfaced = element.value["node_ref"].as_str().expect("surfaced ref");
+    assert_ne!(
+        surfaced, "app#1/entry#1",
+        "the raw adapter ref never reaches the surface"
+    );
+    assert_ne!(surfaced, tree_token, "each delivery mints a fresh token");
+
+    let outcome = tools::dispatch(
+        &core,
+        &set_value_tool,
+        args(&[
+            ("node_ref", surfaced.to_string().into()),
+            ("value", "x".into()),
+        ]),
+    )
+    .await
+    .expect("set_value dispatch");
+    let written = outcome.value["node_ref"].as_str().expect("written ref");
+    assert_ne!(
+        written, "app#1/entry#1",
+        "the typed-write outcome also surfaces a core token"
+    );
 }

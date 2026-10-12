@@ -59,6 +59,13 @@ crate::dto!(
         pub path: String,
         pub data_base64: Option<String>,
         pub text: Option<String>,
+        /// Create missing parent directories of `path` during the adapter's
+        /// per-component `openat`/`mkdirat` walk over the path the scope
+        /// decision canonicalized: symlinks that already existed were resolved
+        /// by that decision, while a symlink planted into the chain afterwards
+        /// fails the write (`Unsupported`) instead of being followed. `false`
+        /// (or `None`) answers a native not-found error when a parent is
+        /// missing.
         pub create_parents: Option<bool>,
     }
 );

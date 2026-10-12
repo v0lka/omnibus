@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke demo №2 «Формы» / "Forms" (roadmap 1.8.2): fs_read -> desktop.tree
+# Smoke demo 2 — "Forms" (roadmap 1.8.2): fs_read -> desktop.tree
 # -> set_value (only ever refused honestly in CI: no grant is issued).
 #
 # Read-only by default: the only file touched is a throwaway marker file the

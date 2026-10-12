@@ -197,7 +197,7 @@ mod tests {
                 status: String::from("opt-in-required"),
                 value: None,
                 note: None,
-                remedy: Some(String::from("omnibus grant pkg.write")),
+                remedy: Some(String::from("omnibusd grant pkg.write")),
             },
         ];
         let state = CapabilitiesState::assemble(

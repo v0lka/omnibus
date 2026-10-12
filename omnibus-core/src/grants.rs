@@ -21,6 +21,17 @@ pub enum GrantProvenance {
     Doctor,
 }
 
+impl GrantProvenance {
+    /// The audit vocabulary label (specs/domains/audit.md: `config|cli|doctor`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Cli => "cli",
+            Self::Doctor => "doctor",
+        }
+    }
+}
+
 /// A human-issued, out-of-band write grant for one capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
@@ -57,6 +68,15 @@ impl GrantRegistry {
     /// True when an out-of-band grant for the capability exists.
     pub fn has_grant(&self, capability: &str) -> bool {
         self.grants.iter().any(|g| g.capability == capability)
+    }
+
+    /// The provenance of the grant on `capability` — the audit `scope_ref`
+    /// source (R5: grant-related events always carry the grant's provenance).
+    pub fn provenance_of(&self, capability: &str) -> Option<GrantProvenance> {
+        self.grants
+            .iter()
+            .find(|g| g.capability == capability)
+            .map(|g| g.provenance)
     }
 }
 
@@ -101,5 +121,20 @@ mod tests {
         // Provenance is part of the grant struct — R5 vocabulary config|cli|doctor.
         let grant = &registry.grants[0];
         assert_ne!(grant.provenance, GrantProvenance::Config);
+    }
+
+    #[test]
+    fn provenance_lookup_feeds_the_audit_scope_ref() {
+        let mut registry = GrantRegistry::new();
+        assert_eq!(registry.provenance_of(PKG_WRITE), None);
+        registry.issue(Grant::new(PKG_WRITE, GrantProvenance::Doctor));
+        assert_eq!(
+            registry.provenance_of(PKG_WRITE),
+            Some(GrantProvenance::Doctor)
+        );
+        // The audit vocabulary labels are exactly config|cli|doctor.
+        assert_eq!(GrantProvenance::Config.label(), "config");
+        assert_eq!(GrantProvenance::Cli.label(), "cli");
+        assert_eq!(GrantProvenance::Doctor.label(), "doctor");
     }
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Smoke demo runner (roadmap 1.8.2): the three pitch demos as autotests.
 #
-#   demo1  «Диагноз за минуту» — journal(prev_boot) -> doctor -> wiki_search
-#   demo2  «Формы»             — fs_read -> desktop.tree -> honest write refusal
-#   demo3  «После обновления»  — pkg_list/info -> pkg_undo honest refusals
+#   demo1  "Diagnosis in a minute" — journal(prev_boot) -> doctor -> wiki_search
+#   demo2  "Forms"                 — fs_read -> desktop.tree -> honest write refusal
+#   demo3  "After the update"      — pkg_list/info -> pkg_undo honest refusals
 #
 # Safe on a developer machine: read-only by default, no system mutation, and
 # every demo exits 0 with "SKIP:" on stderr when a backend is honestly absent.

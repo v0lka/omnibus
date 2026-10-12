@@ -5,9 +5,12 @@
 # facts, not quiet divergences. This workflow owns the Manjaro side:
 #
 #   manjaro-container — the gate + test suites + smoke demos inside a
-#                       manjaro/base-devel container. Job-level
-#                       continue-on-error: the rolling image tag can be
-#                       unpullable; that must never red-lock main.
+#                       manjaro/base-devel container (driven through
+#                       `docker run` so the tolerance is scopeable). ONLY the
+#                       image pull is tolerated (step-level continue-on-error):
+#                       the rolling community tag can be unpullable and that is
+#                       an infrastructure miss. Every failure inside the
+#                       container — gate, tests, smoke — is green-blocking.
 #   arch-fallback     — the same gate + smoke on an archlinux:base-devel
 #                       container, always green-blocking. Documented stand-in:
 #                       Manjaro is the arch family, so this is a smoke signal,
@@ -17,10 +20,9 @@
 #                       only, skipped by default until real runners exist
 #                       (TODO markers below).
 #
-# The full run-on-hardware acceptance script is the planned runbook
-# docs/verification/ms1-ms2-manjaro-acceptance.md — it lands together with the
-# VM legs (task 2.4.1 AC "green on Manjaro-VMs"). Until then, every run of this
-# workflow must print which legs were container-stand-ins and which were real.
+# The acceptance record is docs/verification/ms1-ms2-manjaro-acceptance.md.
+# Until the VM legs exist, every run of this workflow must print which legs
+# were container-stand-ins and which were real.
 
 name: manjaro
 
@@ -45,45 +47,67 @@ defaults:
 jobs:
   manjaro-container:
     name: manjaro/base-devel container (gate + suites + smoke)
-    # Continue-on-error at the JOB level, for image availability only: the
-    # `manjaro/base-devel` tag is a rolling community image and a failed pull
-    # is an infrastructure miss, not a code regression. Every test failure
-    # inside the container still surfaces as an annotation (red job marker).
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    container:
-      # If this tag stops resolving, keep the workflow honest by moving the
-      # gate to the arch-fallback job below and noting the change here — do
-      # NOT silently report Arch results as Manjaro results.
-      image: manjaro/base-devel
+    # Published for leg-classification: only 'success' means the container leg
+    # actually ran; 'failure' means the pull (the one tolerated step) failed
+    # and gate + suites + smoke were skipped for this run.
+    outputs:
+      image_pull: ${{ steps.manjaro_image.outcome }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain and session deps (pacman)
+      - name: Pull the Manjaro image (the only tolerated failure)
+        id: manjaro_image
+        # Scoped to this step ON PURPOSE. A job-level continue-on-error would
+        # neutralize the gate itself; a failed pull of the rolling community
+        # image is an infrastructure miss, not a code regression. Everything
+        # that runs inside the container below stays green-blocking.
+        continue-on-error: true
+        run: docker pull manjaro/base-devel
+
+      - name: Warn when the Manjaro image is unpullable (infra miss)
+        if: steps.manjaro_image.outcome == 'failure'
+        run: |
+          echo "::warning::manjaro/base-devel could not be pulled — the Manjaro container leg (gate + suites + smoke) is skipped for this run. Only the image pull is tolerated; gate, test or smoke failures inside the container would fail (block) this job."
+
+      - name: Gate + suites + smoke inside the Manjaro container
+        if: steps.manjaro_image.outcome == 'success'
         run: |
           set -euo pipefail
-          # --needed keeps reruns cheap; delayed-repo drift is a probe fact and
-          # must surface in the smoke output, never be papered over here.
-          pacman -Syu --noconfirm --needed git rust at-spi2-core
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/work" \
+            --workdir /work \
+            manjaro/base-devel \
+            bash -c '
+              set -euo pipefail
+              git config --global --add safe.directory /work
+              # python: make specs runs specs/tools/validate_specs.py, and the
+              # smoke demos drive the MCP client through python3 heredocs.
+              pacman -Syu --noconfirm --needed git rust at-spi2-core python
+              make specs
+              cargo fmt --all -- --check
+              cargo clippy --workspace --all-targets -- -D warnings
+              cargo run -p omnibus-lints --bin omnibus-lints
+              cargo test -p omnibus-lints --test fixtures
+              cargo build --workspace
+              cargo test --workspace
+              ci/smoke/run-demos.sh
+            '
 
-      - name: Gate (specs + lint)
+      - name: Restore workspace ownership (the container leg ran as root)
+        if: always()
+        # The leg builds into the mounted workspace as root, which leaves a
+        # root-owned target/ behind; on a persistent (self-hosted) runner the
+        # next checkout would then fail to clean it. Best effort on purpose
+        # (step-level continue-on-error): a failed chown — e.g. the image
+        # never pulled — must not mask the real job result.
+        continue-on-error: true
         run: |
-          set -euo pipefail
-          make specs
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo run -p omnibus-lints --bin omnibus-lints
-          cargo test -p omnibus-lints --test fixtures
-
-      - name: Build + full test suite
-        run: |
-          set -euo pipefail
-          cargo build --workspace
-          cargo test --workspace
-
-      - name: Smoke demos 1-3
-        run: ci/smoke/run-demos.sh
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/work" \
+            manjaro/base-devel \
+            chown -R "$(id -u):$(id -g)" /work
 
   arch-fallback:
     name: archlinux fallback container (gate + suites + smoke)
@@ -97,7 +121,9 @@ jobs:
       - name: Install toolchain and session deps (pacman)
         run: |
           set -euo pipefail
-          pacman -Syu --noconfirm --needed git rust at-spi2-core
+          # python: make specs runs specs/tools/validate_specs.py, and the
+          # smoke demos drive the MCP client through python3 heredocs.
+          pacman -Syu --noconfirm --needed git rust at-spi2-core python
 
       - name: Gate (specs + lint)
         run: |
@@ -132,8 +158,8 @@ jobs:
     #      and variables -> Actions -> Variables). While it is unset or false,
     #      this job evaluates to false and is skipped — by design, so the
     #      workflow never fakes a green VM matrix.
-    #   4. Follow docs/verification/ms1-ms2-manjaro-acceptance.md (planned
-    #      runbook, lands with these legs) for the acceptance checklist,
+    #   4. Follow docs/verification/ms1-ms2-manjaro-acceptance.md (the landed
+    #      MS1+MS2 acceptance record; these VM legs re-run its checklist)
     #      including the delayed-repo probe observation AC.
     if: github.event_name == 'workflow_dispatch' && vars.MANJARO_VM_ENABLED == 'true'
     runs-on: ${{ matrix.runner-label }}
@@ -191,3 +217,30 @@ jobs:
           #   ./target/debug/omnibusd doctor | tee probe-report.txt
           #   grep -q 'manjaro(delayed_repos=true' probe-report.txt
           echo "TODO(2.4.1): assert delayed-repos/mhwd/pamac appear in the probe report"
+
+  # The header promises every run prints which legs were container stand-ins
+  # and which were real; this job is that print (always runs, green or red).
+  leg-classification:
+    name: print the leg classification (stand-in vs real)
+    needs: [manjaro-container, arch-fallback, manjaro-vm-matrix]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Classify this run's legs
+        run: |
+          echo "leg classification for this run:"
+          # The container leg's claim must match what actually ran: when the
+          # tolerated image pull failed, gate + suites + smoke were skipped —
+          # never report a skipped leg as executed.
+          if [ "${{ needs.manjaro-container.outputs.image_pull }}" = "failure" ]; then
+            echo "  manjaro-container: SKIPPED — manjaro/base-devel image unpullable (infra miss); gate + suites + smoke did NOT run this time"
+          else
+            echo "  manjaro-container: container stand-in (gate + suites + smoke)"
+          fi
+          echo "  arch-fallback:     container stand-in (smoke signal, not the T1 guarantee)"
+          # The VM legs need BOTH conditions their job gates on: a manual
+          # dispatch AND the variable. A scheduled run with the variable set
+          # still skips them — the classification must say so, never claim a
+          # real leg that did not run.
+          echo "  manjaro-vm-matrix: ${{ github.event_name == 'workflow_dispatch' && vars.MANJARO_VM_ENABLED == 'true' && 'real VM legs (dispatched, MANJARO_VM_ENABLED=true)' || 'skipped (scheduled run or MANJARO_VM_ENABLED unset/false) — container stand-ins only' }}"

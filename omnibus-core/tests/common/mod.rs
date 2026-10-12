@@ -15,6 +15,10 @@ use omnibus_contracts::dto::audit::AuditActor;
 use omnibus_contracts::dto::desktop::{
     A11yElement, A11yNode, A11yTree, InvokeRequest, SetValueRequest, TreeSelector, WriteOutcome,
 };
+use omnibus_contracts::dto::files::{
+    DirListing, FileContent, FileReadRequest, FileWriteRequest, FileWriteResult, PathQuery,
+    PathResolveRequest, ResolvedPath,
+};
 use omnibus_contracts::dto::journal::{JournalPage, JournalQuery, JournalRecord, TailRequest};
 use omnibus_contracts::dto::packages::{
     PackageBrief, PackageHistoryEntry, PackageHistoryQuery, PackageInfo, PackageListRequest,
@@ -28,6 +32,7 @@ use omnibus_contracts::dto::services::{
 };
 use omnibus_contracts::errors::ContractError;
 use omnibus_contracts::spi::a11y::DesktopA11y;
+use omnibus_contracts::spi::files::FileScope;
 use omnibus_contracts::spi::journal::Journal;
 use omnibus_contracts::spi::packages::PackageManager;
 use omnibus_contracts::spi::services::ServiceManager;
@@ -59,7 +64,8 @@ pub fn actor() -> AuditActor {
 
 /// A fresh session context with the given seed (distinct per instance).
 pub fn session(seed: u8) -> SessionContext {
-    SessionContext::new(entropy(seed), actor())
+    SessionContext::try_new(entropy(seed), actor())
+        .expect("a seeded non-zero key is a valid mint key")
 }
 
 /// The audit pipeline with the file fallback at `path` and no primary sink
@@ -239,6 +245,10 @@ impl Journal for FakeJournal {
 pub struct FakePackages {
     pub facts: Vec<CapabilityFact>,
     pub install_delay: Duration,
+    /// When set, `install` answers the honest write-path indeterminate
+    /// failure — the shape real adapters report when their own (only) write
+    /// budget elapses; the core does not timer writes (`tools::dispatch`).
+    pub install_fails: bool,
     pub install_calls: AtomicUsize,
     trace: std::sync::Mutex<Vec<String>>,
 }
@@ -248,6 +258,18 @@ impl FakePackages {
         Arc::new(Self {
             facts,
             install_delay,
+            install_fails: false,
+            install_calls: AtomicUsize::new(0),
+            trace: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// An `install` that fails with the honest indeterminate-write outcome.
+    pub fn failing_install(facts: Vec<CapabilityFact>) -> Arc<Self> {
+        Arc::new(Self {
+            facts,
+            install_delay: Duration::ZERO,
+            install_fails: true,
             install_calls: AtomicUsize::new(0),
             trace: std::sync::Mutex::new(Vec::new()),
         })
@@ -292,6 +314,18 @@ impl PackageManager for FakePackages {
             .lock()
             .expect("trace lock")
             .push(format!("enter:{}", request.name));
+        if self.install_fails {
+            self.trace
+                .lock()
+                .expect("trace lock")
+                .push(format!("leave:{}", request.name));
+            return Err(ContractError::NativeFailure {
+                code: -7,
+                payload: String::from(
+                    "timeout-indeterminate: budget elapsed; the write may still have landed",
+                ),
+            });
+        }
         if !self.install_delay.is_zero() {
             tokio::time::sleep(self.install_delay).await;
         }
@@ -369,11 +403,43 @@ impl ServiceManager for FakeServices {
 /// element-stale scenario never reaches it).
 pub struct FakeA11y {
     pub facts: Vec<CapabilityFact>,
+    /// When set, `element` answers with this element echoing the raw ref;
+    /// otherwise it stays honest (`AdapterUnavailable`).
+    pub element_response: Option<A11yElement>,
+    /// When set, `set_value`/`invoke` answer with this outcome echoing the raw
+    /// ref; otherwise `AdapterUnavailable`.
+    pub write_outcome: Option<WriteOutcome>,
 }
 
 impl FakeA11y {
     pub fn new(facts: Vec<CapabilityFact>) -> Arc<Self> {
-        Arc::new(Self { facts })
+        Arc::new(Self {
+            facts,
+            element_response: None,
+            write_outcome: None,
+        })
+    }
+
+    /// A fake that answers `desktop.element` (echoing the resolved raw ref).
+    pub fn with_element(facts: Vec<CapabilityFact>, element: A11yElement) -> Arc<Self> {
+        Arc::new(Self {
+            facts,
+            element_response: Some(element),
+            write_outcome: None,
+        })
+    }
+
+    /// A fake that also answers the typed writes (echoing the resolved raw ref).
+    pub fn with_writes(
+        facts: Vec<CapabilityFact>,
+        element: A11yElement,
+        outcome: WriteOutcome,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            facts,
+            element_response: Some(element),
+            write_outcome: Some(outcome),
+        })
     }
 }
 
@@ -399,8 +465,15 @@ impl DesktopA11y for FakeA11y {
         })
     }
 
-    async fn element(&self, _node_ref: String) -> Result<A11yElement, ContractError> {
-        Err(ContractError::AdapterUnavailable)
+    async fn element(&self, node_ref: String) -> Result<A11yElement, ContractError> {
+        match &self.element_response {
+            Some(element) => {
+                let mut element = element.clone();
+                element.node_ref = node_ref;
+                Ok(element)
+            }
+            None => Err(ContractError::AdapterUnavailable),
+        }
     }
 
     async fn read_attr(
@@ -411,11 +484,77 @@ impl DesktopA11y for FakeA11y {
         Err(ContractError::AdapterUnavailable)
     }
 
-    async fn set_value(&self, _request: SetValueRequest) -> Result<WriteOutcome, ContractError> {
-        Err(ContractError::AdapterUnavailable)
+    async fn set_value(&self, request: SetValueRequest) -> Result<WriteOutcome, ContractError> {
+        match &self.write_outcome {
+            Some(outcome) => Ok(WriteOutcome {
+                node_ref: request.node_ref,
+                applied: outcome.applied,
+            }),
+            None => Err(ContractError::AdapterUnavailable),
+        }
     }
 
-    async fn invoke(&self, _request: InvokeRequest) -> Result<WriteOutcome, ContractError> {
-        Err(ContractError::AdapterUnavailable)
+    async fn invoke(&self, request: InvokeRequest) -> Result<WriteOutcome, ContractError> {
+        match &self.write_outcome {
+            Some(outcome) => Ok(WriteOutcome {
+                node_ref: request.node_ref,
+                applied: outcome.applied,
+            }),
+            None => Err(ContractError::AdapterUnavailable),
+        }
+    }
+}
+
+/// Files fake: answers list/read/write/resolve for any path it is handed — the
+/// fs suites exercise the core's scope decisions, so the fake never refuses.
+pub struct FakeFiles {
+    pub facts: Vec<CapabilityFact>,
+}
+
+impl FakeFiles {
+    pub fn new(facts: Vec<CapabilityFact>) -> Arc<Self> {
+        Arc::new(Self { facts })
+    }
+}
+
+#[async_trait]
+impl FileScope for FakeFiles {
+    fn report(&self) -> AdapterReport {
+        report("fake-fs-xdg", "files", self.facts.clone())
+    }
+
+    async fn list(&self, query: PathQuery) -> Result<DirListing, ContractError> {
+        Ok(DirListing {
+            path: query.path,
+            entries: vec![],
+            truncated: false,
+        })
+    }
+
+    async fn read(&self, request: FileReadRequest) -> Result<FileContent, ContractError> {
+        Ok(FileContent {
+            path: request.path,
+            size_bytes: 4,
+            data_base64: String::from("ZGF0YQ=="),
+            text: Some(String::from("data")),
+            truncated: false,
+        })
+    }
+
+    async fn write(&self, request: FileWriteRequest) -> Result<FileWriteResult, ContractError> {
+        Ok(FileWriteResult {
+            path: request.path,
+            bytes_written: 4,
+        })
+    }
+
+    async fn resolve(&self, request: PathResolveRequest) -> Result<ResolvedPath, ContractError> {
+        Ok(ResolvedPath {
+            path: request.path.clone(),
+            canonical: request.path,
+            inside_home: true,
+            read_allowed: true,
+            write_allowed: true,
+        })
     }
 }

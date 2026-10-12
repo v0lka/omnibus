@@ -6,10 +6,10 @@ The knowledge domain gives the agent fix-it documentation per platform: search a
 
 ## Key Files
 
-- `omnibus-contracts/` (planned) - `KnowledgeBase` trait, article DTOs, capability constants
-- `omnibus-adapter-kb-archwiki/src/` (planned) - ArchWiki + Manjaro overlay provider (Arch, Manjaro)
+- `omnibus-contracts/src/spi/kb.rs` - the `KnowledgeBase` trait; article DTOs in `omnibus-contracts/src/dto/kb.rs`, capability constants in `omnibus-contracts/src/capabilities.rs`
+- `omnibus-adapter-kb-archwiki/src/` - ArchWiki + Manjaro overlay provider (Arch, Manjaro)
 - `omnibus-adapter-kb-guides/src/` (planned) - distro docs (MS2) and Apple/SS64 guides (macOS, MS3)
-- `omnibus-core/src/tools/doctor.rs` (planned) - consumes `KnowledgeBase` as one of its four orchestrated traits
+- `omnibus-core/src/doctor.rs` - consumes KB facts (adapter report/registry presence) among the subsystem facts doctor composes
 
 ## Capability and Tools
 
@@ -54,4 +54,4 @@ Trait `KnowledgeBase` operations: `search`, `page`.
 - [Non-goals](../architecture/non-goals.md) - the KB playbook engine on the un-plan.
 - [SPI Registry](../architecture/spi-registry.md) - subsystem #7: `KnowledgeBase`.
 - [Tool Registry](../architecture/tool-registry.md) - the `wiki_*` binding and the hiding rule.
-- [Domain: Packages](packages.md) - undo hints (ALA/AUR Archive) live in KB articles, not adapter code.
+- [Domain: Packages](packages.md) - the undo failure payload names the ALA/AUR archive; the actionable undo hints (which article, which URL) live in KB articles.

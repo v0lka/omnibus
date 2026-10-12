@@ -1,0 +1,12 @@
+[package]
+name = "omnibusd"
+version = "0.1.0"
+edition = "2024"
+
+# Legal composition-root edges: adapters, core, probe and contracts. The lint
+# tool must never appear here (R4-EDGES, the omnibusd branch).
+[dependencies]
+omnibus-contracts = { path = "../omnibus-contracts" }
+omnibus-core = { path = "../../omnibus-core" }
+omnibus-probe = { path = "../../omnibus-probe" }
+omnibus-adapter-demo = { path = "../omnibus-adapter-demo" }

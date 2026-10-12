@@ -6,8 +6,8 @@ The network domain exposes read-only network status - devices, connectivity, and
 
 ## Key Files
 
-- `omnibus-contracts/` (planned) - `NetworkStatus` trait, declared together with its first implementation (just-in-time)
-- `omnibus-adapter-nm/` (planned) - the only provider: NetworkManager over D-Bus (zbus), its own crate and subsystem per ADR-003
+- `omnibus-contracts/src/spi/net.rs` - the `NetworkStatus` trait, declared together with its first implementation (just-in-time)
+- `omnibus-adapter-nm/` - the only provider: NetworkManager over D-Bus (zbus), its own crate and subsystem per ADR-003
 
 ## Capability and Tools
 

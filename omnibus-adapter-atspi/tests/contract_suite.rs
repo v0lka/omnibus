@@ -51,6 +51,7 @@ async fn a11y_contract_suite_against_the_live_backend() {
     );
     let fixture = A11yFixture {
         app: app.name.clone(),
+        pid: app.pid,
         live_ref: tree.root.node_ref.clone(),
         // A well-formed reference to an object the registry does not own.
         stale_ref: encode_node_ref(REGISTRY_DEST, "/org/a11y/atspi/accessible/suite-stale"),

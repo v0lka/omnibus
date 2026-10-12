@@ -1,12 +1,28 @@
 //! Limits and retries (specs/architecture/topology-and-lifecycle.md "Limits and
 //! Retries"). Defaults are hardcoded — there is no config surface until a real
-//! request exists; the effective values are visible in `capabilities()` (as the
-//! session limits document) and in doctor output.
+//! request exists; the effective values are visible via the `session_info` tool
+//! (`SessionInfo.limits`).
 
 use std::time::Duration;
 
-/// Tool-call budget for ordinary tools.
+/// Tool-call budget for reads — the only timeout layer a read has.
+///
+/// Writes never ride this timer: each write adapter bounds its own native
+/// work, and the shape of its elapse answer is adapter-defined — a
+/// payload-bearing indeterminate outcome where the adapter can name it
+/// (alpm, fs-xdg, systemd1), a plain `TimeoutError` elsewhere (see
+/// `tools::dispatch`, "exactly one timeout layer per call").
+///
+/// Timeout semantics are honest, not cancellation (see `tools::dispatch`): on
+/// elapse the dispatched future is dropped at its next await point and a
+/// request already on the wire may still complete natively — `TimeoutError`
+/// means "the core stopped waiting; the outcome is unknown".
 pub const TOOL_CALL_BUDGET: Duration = Duration::from_secs(10);
+
+/// Wall-clock bound on cross-process write-gate acquisition. The gate is taken
+/// *before* the tool budget starts, so it bounds itself; a second instance
+/// holding the flock past this window answers `TimeoutError` (audited).
+pub const WRITE_GATE_BUDGET: Duration = Duration::from_secs(5);
 
 /// `desktop.tree` gets a wider budget.
 pub const TREE_BUDGET: Duration = Duration::from_secs(15);

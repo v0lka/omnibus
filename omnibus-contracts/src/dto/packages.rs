@@ -74,6 +74,8 @@ crate::dto!(
 crate::dto!(
     pub struct TransactionResult {
         pub name: String,
+        /// Advisory version as of the lookup: a concurrent native transaction
+        /// can make the applied version differ (audit-facing, best-effort).
         pub version_applied: Option<String>,
     }
 );

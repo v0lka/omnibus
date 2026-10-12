@@ -12,7 +12,8 @@
 //! 4. `EDGES` — Cargo.toml dependency direction:
 //!    contracts <- adapters/core/probe; adapters depend only on contracts;
 //!    adapters never depend on each other or on the core; the lint crate
-//!    depends on nothing internal.
+//!    depends on nothing internal; the composition root (`omnibusd`) may link
+//!    adapters, core and probe but never the lint tool.
 //!
 //! Each rule is proven by negative fixtures (violation red, fixed green) in
 //! `tests/fixtures.rs`. The fixtures live in this crate rather than in
@@ -41,6 +42,15 @@ pub const CONTRACTS_ALLOWED_DEPS: [&str; 6] = [
     "tokio",
     "futures-core",
     "thiserror",
+];
+
+/// The capability domains the R4-CON predicate accepts as the first segment of a
+/// capability-shaped literal — the eight families of the closed capability
+/// registry (specs/architecture/capability-model.md). The registry drift guard in
+/// `tests/fixtures.rs` fails when `omnibus-contracts/src/capabilities.rs` grows a
+/// capability in a new domain without extending this list.
+pub const CAPABILITY_DOMAINS: [&str; 8] = [
+    "desktop", "journal", "service", "pkg", "portal", "files", "kb", "net",
 ];
 
 /// One lint violation.
@@ -98,11 +108,12 @@ fn rust_files(root: &Path, dir: &str) -> Vec<PathBuf> {
 }
 
 fn read_lines(path: &Path) -> Vec<String> {
-    fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("lint: cannot read {}: {e}", path.display()))
-        .lines()
-        .map(str::to_string)
-        .collect()
+    let Ok(text) = fs::read_to_string(path) else {
+        // A file vanishing mid-scan degrades the scan instead of failing the
+        // gate (same graceful pattern as `manifest_dependency_names`).
+        return Vec::new();
+    };
+    text.lines().map(str::to_string).collect()
 }
 
 /// Rule 1 (R4-COP): within `trait` bodies in `omnibus-contracts/src`, tuple types in
@@ -111,6 +122,10 @@ fn read_lines(path: &Path) -> Vec<String> {
 /// Trait bodies in the contracts crate are declaration-only by DTO discipline, so a
 /// conservative line scan inside trait brace ranges is sufficient; it flags tuple
 /// types anywhere inside a trait body.
+///
+/// Limitation: a trait whose `{` is not on the declaration line (a multi-line
+/// `where` clause) is never entered, so its body is not scanned; current
+/// contracts declare every trait on a single line.
 pub fn lint_cop(root: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
     for path in rust_files(root, "omnibus-contracts/src") {
@@ -312,6 +327,9 @@ pub fn lint_con(root: &Path) -> Vec<Finding> {
         "omnibus-core/src",
         "omnibus-probe/src",
         "omnibus-lints/src",
+        // The composition root too: grant/doctor CLI strings are the likeliest
+        // place for a capability literal to creep in outside the registry.
+        "omnibusd/src",
     ] {
         for path in rust_files(root, dir) {
             if path == root.join(CAPABILITY_REGISTRY_PATH) {
@@ -356,9 +374,6 @@ fn scan_capability_literals(root: &Path, path: &Path, findings: &mut Vec<Finding
 }
 
 fn looks_like_capability_name(s: &str) -> bool {
-    const DOMAINS: [&str; 8] = [
-        "desktop", "journal", "service", "pkg", "portal", "files", "kb", "net",
-    ];
     let segments: Vec<&str> = s.split('.').collect();
     segments.len() >= 2
         && segments.iter().all(|seg| {
@@ -370,7 +385,7 @@ fn looks_like_capability_name(s: &str) -> bool {
         })
         && segments
             .first()
-            .is_some_and(|first| DOMAINS.contains(first))
+            .is_some_and(|first| CAPABILITY_DOMAINS.contains(first))
 }
 
 /// Rule 4 (R4-EDGES): the dependency direction over all workspace manifests.
@@ -406,6 +421,17 @@ pub fn lint_edges(root: &Path) -> Vec<Finding> {
                 if dep.as_str() != "omnibus-contracts" {
                     findings.push(violation(format!(
                         "adapter depends on `{dep}`: adapters may depend only on omnibus-contracts (P6, no adapter-to-adapter, no core)"
+                    )));
+                }
+            }
+        } else if member == "omnibusd" {
+            // The composition root is the one crate allowed to link adapters,
+            // core and probe (specs/contracts/core-adapters.md, Initialization);
+            // the lint tool is a standalone dev tool, never a daemon dependency.
+            for dep in &internal {
+                if dep.as_str() == "omnibus-lints" {
+                    findings.push(violation(format!(
+                        "composition root depends on `{dep}`: omnibusd may link omnibus-core, omnibus-probe, adapters and contracts - never the lint tool"
                     )));
                 }
             }

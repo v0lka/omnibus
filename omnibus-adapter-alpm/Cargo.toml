@@ -19,4 +19,5 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt", "time"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+# test-util: tokio::time::pause/advance for the write-budget elapse tests.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "test-util"] }

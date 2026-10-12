@@ -2,7 +2,7 @@
 //! diagnosis of Omnibus' own prerequisites over the SPI traits. Called through MCP
 //! it only diagnoses and produces copy-paste remediation for a human — it never
 //! mutates the system, whatever the agent answers (no consent surface exists).
-//! Mutations happen when a human executes `omnibus doctor` in CLI mode.
+//! Mutations happen when a human executes `omnibusd doctor` in CLI mode.
 
 use omnibus_contracts::capabilities as cap;
 use omnibus_contracts::dto::caps::{DoctorCommand, DoctorFinding, DoctorReport};
@@ -25,8 +25,9 @@ fn remedy(mut f: DoctorFinding, remedy: String) -> DoctorFinding {
     f
 }
 
-/// Orchestrates probe + journal + services + KB facts into one diagnosis. Reads
-/// only; every suggested change is a command string for a human to run.
+/// Orchestrates the probe report, capability entries, adapter-registry presence,
+/// and audit-sink and write-gate facts into one diagnosis. Reads only; every
+/// suggested change is a command string for a human to run.
 pub async fn diagnose(core: &Core) -> DoctorReport {
     let mut findings: Vec<DoctorFinding> = Vec::new();
     let mut commands: Vec<DoctorCommand> = Vec::new();
@@ -105,8 +106,13 @@ pub async fn diagnose(core: &Core) -> DoctorReport {
         )),
         None => {
             // Fact-driven (m0-findings.md): persistence is judged by the probe
-            // fact, not by distro family — a volatile-configured machine of any
-            // family gets the same honest suggestion, executed by a human.
+            // fact, not by distro family. This storage suggestion fires when the
+            // `journal.persistent` entry is absent entirely (journald adapter
+            // inactive); a volatile machine with an active adapter reports the
+            // entry as `opt-in-required` and is served by the generic opt-in
+            // grant suggestion (`omnibusd grant journal.persistent`) instead —
+            // surfacing the storage command there remains roadmap 2.5.1 work.
+            // Either way the mutation is executed by a human.
             findings.push(remedy(
                 finding(
                     "journal",
@@ -134,35 +140,117 @@ pub async fn diagnose(core: &Core) -> DoctorReport {
         let entry = core.caps.entry(capability);
         let Some(entry) = entry else { continue };
         if entry.status == "opt-in-required" && !core.grants.has_grant(capability) {
+            // The unlocking command is the fact's own remedy when the adapter
+            // supplies one: e.g. the volatile-journal prev-boot rung is
+            // unlocked by a grant on the persistent-journal capability, not by
+            // a grant on the fact itself — a synthesized command naming the
+            // fact would be rejected by the grant CLI and the finding could
+            // never clear. Synthesize only when the adapter names no lever.
+            let command = entry
+                .remedy
+                .clone()
+                .unwrap_or_else(|| format!("omnibusd grant {capability}"));
+            let name = command
+                .strip_prefix("omnibusd ")
+                .unwrap_or(&command)
+                .to_string();
             findings.push(remedy(
                 finding(
                     "grant",
                     "warn",
                     format!("capability {capability} is opt-in and not granted"),
                 ),
-                format!("run: omnibus grant {capability}"),
+                format!("run: {command}"),
             ));
             commands.push(DoctorCommand {
-                name: format!("grant {capability}"),
-                command: format!("omnibus grant {capability}"),
+                name,
+                command,
                 executed_by: String::from(EXECUTED_BY_HUMAN),
             });
         }
     }
 
     // --- Audit sink health (degraded sink never fails a tool; must be visible) ---
+    if !core.audit.fallback_healthy() {
+        findings.push(remedy(
+            finding(
+                "audit",
+                "fail",
+                format!(
+                    "the audit fallback at {} is unwritable: audit events are being lost",
+                    core.audit.fallback_path().display()
+                ),
+            ),
+            String::from(
+                "make the state directory writable (check XDG_STATE_HOME), then start a new omnibusd instance",
+            ),
+        ));
+    }
     if !core.audit.primary_present() {
+        // The completeness claim is honest in all three fallback states: an
+        // untried sink must never read as proven (`Unproven` is what a fresh
+        // session with zero audited calls reports).
+        let completeness = match core.audit.fallback_health() {
+            crate::audit::FallbackHealth::Failing => {
+                "; the fallback is unwritable too — the audit trail is being lost"
+            }
+            crate::audit::FallbackHealth::Unproven => {
+                "; no audit event has been written yet this session, so the fallback's writability is not yet proven"
+            }
+            crate::audit::FallbackHealth::Writing => {
+                "; the writable fallback keeps the audit trail complete"
+            }
+        };
         findings.push(remedy(
             finding(
                 "audit",
                 "warn",
                 format!(
-                    "primary audit sink unavailable; events go to the file fallback at {}",
-                    core.audit.fallback_path().display()
+                    "primary audit sink unavailable; events go to the file fallback at {}{}",
+                    core.audit.fallback_path().display(),
+                    completeness
+                ),
+            ),
+            String::from("check journald availability"),
+        ));
+    }
+
+    // --- Grant manifests that failed to load (the error channel is doctor's) ---
+    for error in &core.scopes.errors {
+        findings.push(remedy(
+            finding(
+                "grants",
+                "fail",
+                format!(
+                    "grant manifest unreadable: {} ({})",
+                    error.path, error.detail
+                ),
+            ),
+            format!(
+                "fix or remove {}; capabilities it grants stay hidden until the file loads",
+                error.path
+            ),
+        ));
+    }
+
+    // --- Write gate: a lost or absent cross-process lock is a visible
+    // degradation (#9), quoted with the failing syscall's reason when the
+    // lock itself failed ---
+    if core.write_gate.lock_degraded() || !core.write_gate.cross_process_available() {
+        let detail = match core.write_gate.lock_failure_detail() {
+            Some(detail) => format!(" ({detail})"),
+            None => String::new(),
+        };
+        findings.push(remedy(
+            finding(
+                "write-gate",
+                "warn",
+                format!(
+                    "the cross-process write lock is unavailable{detail}: concurrent daemon instances are not serialized (in-process serialization still holds)"
                 ),
             ),
             String::from(
-                "check journald availability; the fallback keeps the audit trail complete",
+                "make XDG_RUNTIME_DIR writable (or set it to a writable directory), then start a new omnibusd instance",
             ),
         ));
     }

@@ -1,57 +1,27 @@
-# ADR-001: dyn Trait over generics and dynamic plugins
+# Architecture decision records (pointer)
 
-## Status
+The authoritative home of omnibus ADRs is `specs/decisions/` (see
+`specs/META.md`: ADRs are numbered `NNN-` + kebab-case slug, `Accepted`
+records are immutable, and supersession happens by a new numbered ADR — never
+by editing the old one).
 
-Accepted
+- **ADR-001 — Dynamic Trait SPI for the adapter boundary**: normative record
+  at [specs/decisions/001-dyn-trait-spi.md](../specs/decisions/001-dyn-trait-spi.md).
+  In short: SPI traits are trait objects (`dyn Trait`) held in the
+  probe-assembled registry; adapters are compile-time workspace members
+  instantiated exactly once.
 
-## Context
+This `docs/` page used to carry a full copy of ADR-001; the copy is gone so
+the two records cannot drift. Two facts the copy used to state, corrected
+here because they are load-bearing for the crate map:
 
-Adapter selection is a runtime fact: the probe inspects the concrete machine
-(distro family, daemon liveness, version floors) and only then decides which
-SPI implementations become active. The composition root - the `omnibusd`
-binary target in `omnibus-core` - links the adapter crates and assembles the
-registry once, from the probe report. The boundary rules constrain the shape
-of that assembly: R4-EDGES forbids everything except
-`omnibus-contracts <- {adapters, core, probe}`, and `omnibus-core` must never
-link adapter crates directly. The question was how the core holds adapter
-implementations it cannot name at compile time.
-
-## Decision
-
-SPI traits are used as trait objects (`dyn Trait`) stored in the
-probe-assembled registry. The MCP facade and the core operate on the
-contract traits only; no generic parameter of any core type names an
-adapter, and no adapter is loaded from outside the workspace. Adapter
-crates are compile-time workspace members, instantiated exactly once, in
-the composition root.
-
-## Consequences
-
-Positive:
-
-- One static binary; the whole seam stays auditable under
-  `unsafe_code = "forbid"`.
-- Runtime adapter selection follows the probe report with no platform
-  build matrix - the same binary serves Arch, Manjaro, and future
-  families.
-- Adapter cross-talk (P6) is structurally impossible: adapters meet only
-  through the contracts, and R4-EDGES rejects any direct edge.
-
-Negative:
-
-- Dynamic dispatch on every adapter call; accepted as negligible for
-  I/O-bound operations (bus calls, process spawns, portal round-trips).
-- Extending the system with a new adapter is a compile-time change
-  (workspace member + probe branch); no third-party runtime plugins.
-
-## Alternatives Considered
-
-- Static dispatch via generics: monomorphization would force every core
-  structure to carry adapter type parameters and reintroduce a
-  per-platform build matrix, against the one-static-binary packaging
-  (task 1.8.1); it also pushes adapter names into core, against
-  R4-EDGES.
-- Dynamic `.so` plugin loading: requires a stable ABI and unsafe
-  boundaries, contradicts the panic-free, unsafe-free workspace policy,
-  and recreates a custom plugin format - while MCP already is the
-  plugin standard (never-list).
+- The composition root is **the `omnibusd` binary crate** (`omnibusd/`,
+  assembled in `omnibusd/src/wiring.rs`): it links the adapter crates and
+  builds the registry once, from the probe report. It is *not* "the
+  `omnibusd` binary target in `omnibus-core`" — an earlier revision of the
+  copy here said exactly that, which the R4-EDGES lint now forbids
+  (`omnibus-core` links no adapter crates; the thin `omnibusd` crate exists
+  so the composition root has somewhere to live).
+- Everything else in ADR-001 (context, decision, consequences, alternatives)
+  is normative in `specs/decisions/001-dyn-trait-spi.md`; where wording
+  differs, that file wins.

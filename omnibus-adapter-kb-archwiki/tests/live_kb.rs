@@ -49,7 +49,9 @@ fn archwiki_reachable() -> bool {
 fn transient(error: &ContractError) -> bool {
     match error {
         ContractError::AdapterUnavailable | ContractError::TimeoutError => true,
-        ContractError::NativeFailure { code, .. } => *code >= 500,
+        // code 1 is this adapter's transport class (offline, refused, DNS,
+        // deadline-adjacent decode failures); HTTP 5xx is a server-side blip.
+        ContractError::NativeFailure { code, .. } => *code == 1 || *code >= 500,
         _ => false,
     }
 }
@@ -83,10 +85,13 @@ where
 }
 
 /// The honest flap-guard: `error` survived the retries, so decide between
-/// "network died mid-test" (skip) and a genuine failure (panic).
-fn fail_or_skip(what: &str, error: ContractError) -> ! {
+/// "network died mid-test" (honest skip: print and let the caller return) and
+/// a genuine failure (panic). The skip arm must not panic — a skip that fails
+/// the suite is just a flaky failure.
+fn fail_or_skip(what: &str, error: ContractError) {
     if !archwiki_reachable() {
-        panic!("skipped: the archwiki endpoint went away mid-test during {what} ({error})");
+        eprintln!("skipped: the archwiki endpoint went away mid-test during {what} ({error})");
+        return;
     }
     panic!("live {what} kept failing while the endpoint answers: {error}");
 }
@@ -132,7 +137,10 @@ fn live_search_and_page_roundtrip_against_archwiki() {
             .await
         {
             Ok(refs) => refs,
-            Err(e) => fail_or_skip("search", e),
+            Err(e) => {
+                fail_or_skip("search", e);
+                return;
+            }
         };
         assert!(
             !refs.is_empty(),
@@ -150,7 +158,10 @@ fn live_search_and_page_roundtrip_against_archwiki() {
             .await
         {
             Ok(article) => article,
-            Err(e) => fail_or_skip("page", e),
+            Err(e) => {
+                fail_or_skip("page", e);
+                return;
+            }
         };
         assert!(!article.stale, "a fresh fetch is never stale");
         assert!(!article.text.is_empty(), "the article carries its wikitext");
@@ -181,7 +192,10 @@ fn kb_suite_exercises_the_live_endpoint() {
             .await
         {
             Ok(refs) => refs,
-            Err(e) => fail_or_skip("search", e),
+            Err(e) => {
+                fail_or_skip("search", e);
+                return;
+            }
         };
         let known_url = refs
             .iter()

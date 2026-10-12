@@ -15,9 +15,9 @@ manifest is required in addition to the capability. Core tools are marked (core)
 | `desktop.set_value` [+scope] | `desktop.tree` + `desktop.write.typed` (+ write grant) | `DesktopA11y` |
 | `desktop.invoke` [+scope] | `desktop.tree` + `desktop.write.typed` (+ write grant) | `DesktopA11y` |
 | `clip_read` | `portal.clipboard` | `ScreenCapture` |
-| `clip_write` [+scope `clip.write`] | `portal.clipboard` | `ScreenCapture` |
+| `clip_write` [+scope] | `portal.clipboard` | `ScreenCapture` |
 | `screenshot` | `portal.screenshot` | `ScreenCapture` |
-| `notify` [+scope `notify.send`] | `portal.notify` | `Notify` |
+| `notify` [+scope] | `portal.notify` | `Notify` |
 | `svc_list` / `svc_status` | `service.read` | `ServiceManager` |
 | `svc_start` / `svc_stop` [+scope] | `service.write` | `ServiceManager` |
 | `net_status` | `net.read` | `NetworkStatus` |
@@ -31,7 +31,7 @@ manifest is required in addition to the capability. Core tools are marked (core)
 | `intent_list` / `intent_run` [+scope `intents.run`] (MS3, macOS) | `intents.list` / `intents.run`; hidden without actions in probe report | `AppIntentsBridge` |
 | `capabilities()` (core) | none | `PlatformProbe` aggregate |
 | `session_info` (core) | none | core |
-| `doctor` (core; orchestrates 4 traits) | none | `PlatformProbe` + `Journal` + `ServiceManager` + `KnowledgeBase` |
+| `doctor` (core; composes subsystem facts) | none | probe/caps/registry state + audit-sink and write-gate health |
 
 ## Hiding Rule
 

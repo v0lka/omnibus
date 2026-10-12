@@ -12,7 +12,7 @@ below is the normative restatement; consequences bind the architecture.
 |---|-----------|---------------------------|
 | P1 | Contract-first, OS-second | MCP tools are defined by the core contract, not by what a specific OS offers; the OS supplies implementations behind the explicit SPI boundary. |
 | P2 | Semantics, not pixels | Reading is semantic (a11y trees, logs, unit status); writing is typed (`desktop.set_value`, `desktop.invoke`). Input emulation (ydotool/uinput, CGEvent) is out of v1; a "last resort" opt-in returns only on proven demand. |
-| P3 | Read/write asymmetry | Reading is always allowed (read is audited); writing happens only through typed methods and only under grants issued by a human out of band (TOML config, `omnibus grant`, doctor CLI). |
+| P3 | Read/write asymmetry | Reading is always allowed (read is audited); writing happens only through typed methods and only under grants issued by a human out of band (TOML config, `omnibusd grant`, doctor CLI). |
 | P4 | `capabilities()` is the single source of truth | Neither core nor agent "knows the distro"; all behavior derives from the machine-readable capability report. Tools with missing capabilities are hidden, not runtime-erroring. |
 | P5 | Audit is total | Every agent action emits one structured event; the event schema belongs to the core, the sink is a swappable adapter (`AuditSink`). |
 | P6 | Adapters never conspire | An adapter never calls another adapter; tool composition (doctor) is core responsibility. |
@@ -37,9 +37,10 @@ theoretical remainder and would be an optional adapter, not core behavior.
 ## Tier vs Capabilities (derived rule)
 
 A tier (T1/T2/T3) is a promise-and-testing category; `capabilities()` is machine truth about one
-machine. They diverge in the wild (volatile-by-default Ubuntu LTS reports `journal.persistent` as
-`opt-in-required` and hides `journal.prev_boot` until the doctor opt-in, although the tier promises
-full reading) and `capabilities()` always wins in a dispute.
+machine. They diverge in the wild (a machine with a volatile-configured journald reports `journal.persistent`
+as `opt-in-required` and keeps `journal.prev_boot` under the ladder until the doctor-led opt-in
+completes — the grant plus the manual persistent-storage creation and a reboot; see journal.md —
+although its tier promises full reading) and `capabilities()` always wins in a dispute.
 
 ## Invariants
 

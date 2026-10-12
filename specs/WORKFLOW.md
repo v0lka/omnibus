@@ -12,8 +12,9 @@ Specs are the **source of truth** about intended behavior, derived from the desi
 
 - A discrepancy between a spec and future code is a bug - in the code or in the spec; determine
   by context and fix the wrong side.
-- Specs describe a system that has no code yet: all crate paths are marked `(planned)` and
-  describe the target layout the roadmap builds toward.
+- A spec may describe code that does not exist yet: future crate paths are marked `(planned)`
+  (or sit inside a fenced planned-layout block) and describe the target layout the roadmap
+  builds toward; every unmarked path must already exist.
 - Specs never introduce new product or architecture decisions; when a decision is needed, the
   source design doc changes first, then the specs.
 - Organized by domains (functional areas), not by file layout; contracts are first-class.
