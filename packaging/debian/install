@@ -1,0 +1,6 @@
+# dh_install manifest (roadmap task 2.6.1). One static binary, one set of
+# read-only scope-manifest templates - the same artifact set packaging/
+# PKGBUILD installs on the arch family. Source paths are relative to the
+# source root (the repository tree); globs are resolved by dh_install.
+target/release/omnibusd usr/bin
+packaging/scopes.d/*.toml etc/omnibus/scopes.d

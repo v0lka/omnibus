@@ -1,0 +1,25 @@
+#!/usr/bin/make -f
+# Debian rules for omnibus (roadmap task 2.6.1, in-repo part).
+#
+# The source package is the repository tree, so the build runs cargo against
+# the workspace root (the same convention as packaging/PKGBUILD: sources are
+# the repo itself) and dh_install picks the artifacts up via debian/install.
+# No upstream tarball exists; the source format is 3.0 (native) - see
+# debian/source/format.
+
+# debhelper with the default sequence; the overrides below replace the
+# auto-detected build/install steps with the cargo conventions of this repo.
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release
+
+# The contract suite and smoke demos are CI-matrix work, not package-build
+# work: they need a session-capable environment and live in ci/matrix/
+# (.github/workflows/t2.yml). A package build must stay hermetic.
+override_dh_auto_test:
+	:
+
+override_dh_auto_install:
+	:

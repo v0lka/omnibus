@@ -5,7 +5,7 @@
 //! store at build time (config-and-grants.md).
 
 use omnibus_contracts::capabilities::CapabilityStatus;
-use omnibus_contracts::dto::caps::{CapabilitiesDocument, CapabilityEntry};
+use omnibus_contracts::dto::caps::{CapabilitiesDocument, CapabilityEntry, FloorExplanation};
 use omnibus_contracts::dto::probe::{FloorStatus, PlatformReport};
 
 /// The assembled machine truth of one session (fresh probe per session).
@@ -43,11 +43,30 @@ impl CapabilitiesState {
             a.name == b.name && a.adapter == b.adapter && a.ver == b.ver && a.status == b.status
         });
         entries.sort_by(|a, b| a.name.cmp(&b.name));
+        // Ladder rung 3 travels IN the document (roadmap 2.1.2, additive field):
+        // every unmet floor is explained with the probe's contract-rendered
+        // reason (`systemd 247 < 252` shape); met floors explain nothing.
+        let floors: Vec<FloorExplanation> = platform
+            .floors
+            .iter()
+            .filter(|floor| !floor.met)
+            .map(|floor| FloorExplanation {
+                component: floor.component.clone(),
+                reason: floor.reason.clone().unwrap_or_else(|| {
+                    format!(
+                        "{} < {}",
+                        floor.actual.clone().unwrap_or_default(),
+                        floor.floor
+                    )
+                }),
+            })
+            .collect();
         Self {
             document: CapabilitiesDocument {
                 contract_version: omnibus_contracts::version::CONTRACT_VERSION.to_string(),
                 distro: platform.distro.clone(),
                 capabilities: entries,
+                floors,
             },
             floors: platform.floors.clone(),
         }
@@ -249,5 +268,32 @@ mod tests {
             ),
             crate::ladder::LadderState::FloorUnsupported
         );
+    }
+
+    /// Roadmap 2.1.2 (additive document field): the assembled document explains
+    /// every unmet floor with the probe's reason string ("systemd 247 < 252"
+    /// shape) and stays silent about met floors. The `capabilities` tool
+    /// serializes exactly this document, so the explanation reaches the agent.
+    #[test]
+    fn document_explains_unmet_floors_only() {
+        let floors = vec![
+            FloorStatus {
+                component: String::from("systemd"),
+                actual: Some(String::from("247")),
+                floor: String::from("252"),
+                met: false,
+                reason: Some(String::from("systemd 247 < 252")),
+            },
+            met_floor("at-spi2", "2.60"),
+        ];
+        let state = CapabilitiesState::assemble(&registry_with(vec![]), &platform(floors));
+        let explained = &state.document.floors;
+        assert_eq!(explained.len(), 1, "only the unmet floor is explained");
+        assert_eq!(explained[0].component, "systemd");
+        assert_eq!(explained[0].reason, "systemd 247 < 252");
+
+        // No unmet floor: the field is present but empty (additive on the wire).
+        let clean = CapabilitiesState::assemble(&registry_with(vec![]), &platform(vec![]));
+        assert!(clean.document.floors.is_empty());
     }
 }

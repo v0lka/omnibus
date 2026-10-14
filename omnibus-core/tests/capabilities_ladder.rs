@@ -345,3 +345,131 @@ async fn below_floor_systemd_hides_only_the_services_tools() {
     let svc = tools::dispatch(&core, "svc_list", args(&[])).await;
     assert!(matches!(svc, Err(ContractError::FloorUnsupported)));
 }
+
+/// Rung 1 — schema marking (roadmap 2.1.2 + 2.2.2): on a machine whose `pkg.undo`
+/// fact reports value `none` (the apt shape), the VISIBLE `pkg_install` /
+/// `pkg_remove` schemas carry the degradation note sourced from the caps entry;
+/// no other tool is marked, `pkg_undo` itself stays hidden through the ladder,
+/// and a machine with a real undo value (`cache-downgrade`, the alpm shape)
+/// renders the plain generated schema.
+#[tokio::test]
+async fn undo_none_marks_only_the_pkg_write_schemas() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // The apt adapter owns this wording (UNDO_UNAVAILABLE_NOTE); core tests
+    // inline it because core never links adapter crates (R4-EDGES).
+    let undo_note = String::from(
+        "undo unavailable: apt has no transactional rollback (recovery = journal history + a manual fix plan)",
+    );
+    let mut grants = GrantRegistry::new();
+    grants.issue(Grant::new(cap::PKG_WRITE, GrantProvenance::Cli));
+
+    let apt_shaped = build_core(
+        Registry {
+            packages: Some(FakePackages::new(
+                vec![
+                    common::fact(cap::PKG_READ, "present"),
+                    common::fact(cap::PKG_WRITE, "present"),
+                    common::fact_with(
+                        cap::PKG_UNDO,
+                        "none",
+                        Some(serde_json::json!("none")),
+                        Some(undo_note.clone()),
+                        None,
+                    ),
+                ],
+                std::time::Duration::ZERO,
+            )),
+            ..Registry::default()
+        },
+        grants,
+        ScopeManifests::default(),
+        common::pipeline_for(&common::session(9), &dir.path().join("apt.jsonl")),
+        platform(vec![met_floor("systemd", "261")]),
+        9,
+    );
+
+    // pkg_undo stays hidden; the write tools are visible and marked.
+    let names: Vec<String> = tools::visible_tools(&apt_shaped)
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n == "pkg_undo"),
+        "value none: the undo tool stays hidden via the ladder"
+    );
+    assert!(names.iter().any(|n| n == "pkg_install"));
+    assert!(names.iter().any(|n| n == "pkg_remove"));
+
+    for tool in ["pkg_install", "pkg_remove"] {
+        let spec = tools::visible_tools(&apt_shaped)
+            .into_iter()
+            .find(|s| s.name == tool)
+            .unwrap_or_else(|| panic!("{tool} is visible"));
+        let schema = tools::schema_json_annotated(&apt_shaped, &spec);
+        assert_eq!(
+            schema
+                .get("description")
+                .and_then(serde_json::Value::as_str),
+            Some(undo_note.as_str()),
+            "{tool}'s schema carries the caps entry's note"
+        );
+    }
+
+    // Only the pkg write pair is marked: a sibling pkg read renders clean even
+    // on this machine.
+    let read_spec = tools::visible_tools(&apt_shaped)
+        .into_iter()
+        .find(|s| s.name == "pkg_list")
+        .expect("pkg_list visible");
+    let read_schema = tools::schema_json_annotated(&apt_shaped, &read_spec);
+    assert!(
+        read_schema.get("description").is_none(),
+        "the note never leaks onto other tools"
+    );
+
+    // pkg_undo is not merely unlisted — a direct call answers CapabilityRequired.
+    let direct = tools::dispatch(&apt_shaped, "pkg_undo", args(&[("name", "demo".into())])).await;
+    assert!(matches!(direct, Err(ContractError::CapabilityRequired)));
+
+    // The alpm shape (undo present): the same tools render the plain schema.
+    let mut alpm_grants = GrantRegistry::new();
+    alpm_grants.issue(Grant::new(cap::PKG_WRITE, GrantProvenance::Cli));
+    alpm_grants.issue(Grant::new(cap::PKG_UNDO, GrantProvenance::Cli));
+    let alpm_shaped = build_core(
+        Registry {
+            packages: Some(FakePackages::new(
+                vec![
+                    common::fact(cap::PKG_READ, "present"),
+                    common::fact(cap::PKG_WRITE, "present"),
+                    common::fact_with(
+                        cap::PKG_UNDO,
+                        "present",
+                        Some(serde_json::json!("cache-downgrade")),
+                        None,
+                        None,
+                    ),
+                ],
+                std::time::Duration::ZERO,
+            )),
+            ..Registry::default()
+        },
+        alpm_grants,
+        ScopeManifests::default(),
+        common::pipeline_for(&common::session(10), &dir.path().join("alpm.jsonl")),
+        platform(vec![met_floor("systemd", "261")]),
+        10,
+    );
+    let undo_visible = tools::visible_tools(&alpm_shaped)
+        .iter()
+        .any(|s| s.name == "pkg_undo");
+    assert!(undo_visible, "a real undo value lists the tool");
+    let spec = tools::visible_tools(&alpm_shaped)
+        .into_iter()
+        .find(|s| s.name == "pkg_install")
+        .expect("pkg_install visible");
+    let schema = tools::schema_json_annotated(&alpm_shaped, &spec);
+    assert!(
+        schema.get("description").is_none(),
+        "no degradation note when pkg.undo is not none"
+    );
+}

@@ -17,6 +17,10 @@
 #   test       cargo test --workspace — carries the contract suite (R2, as traits
 #              arrive), the R4 negative fixtures, the R5/R6 security seeds and the
 #              R3 ladder suite (as code appears)
+#   packaging  ci/validate_packaging.py — parses + cross-checks the T2 packaging
+#              inputs (debian/, fedora/, ppa/), the ci/matrix/ definitions and
+#              the workflow wiring (roadmap 2.6.1 / 2.6.2); REQ-EXT install runs
+#              are documented, never faked
 #   run-debug  cargo run --bin omnibusd (debug profile)
 #   specs      python3 specs/tools/validate_specs.py
 #
@@ -26,7 +30,7 @@
 CARGO ?= cargo
 PYTHON ?= python3
 
-.PHONY: gate build lint test specs run-debug clean help
+.PHONY: gate build lint test specs packaging run-debug clean help
 
 .DEFAULT_GOAL := gate
 
@@ -47,6 +51,9 @@ test: ## cargo test --workspace (R2 contract suite, R4 fixtures, R5/R6 security,
 
 specs: ## validate the spec system (structure, index, links, coverage, paths)
 	$(PYTHON) specs/tools/validate_specs.py
+
+packaging: ## validate the T2 packaging inputs + ci/matrix definitions (2.6.1/2.6.2)
+	$(PYTHON) ci/validate_packaging.py
 
 run-debug: ## run the omnibusd daemon in the debug profile
 	$(CARGO) run --bin omnibusd

@@ -96,7 +96,11 @@ impl ServerHandler for OmnibusHandler {
                     spec.name.clone(),
                     spec.description,
                     Arc::new(
-                        crate::tools::schema_json(spec)
+                        // Rung 1 marking: a degraded write tool's schema carries
+                        // the limitation (apt machines mark pkg_install/pkg_remove
+                        // with the undo-unavailable note) — generated schema,
+                        // never a hand-written one.
+                        crate::tools::schema_json_annotated(&self.core, spec)
                             .as_object()
                             .cloned()
                             .unwrap_or_default(),

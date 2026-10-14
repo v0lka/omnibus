@@ -646,6 +646,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "omnibus-adapter-apt"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "omnibus-contracts",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omnibus-adapter-atspi"
 version = "0.1.0"
 dependencies = [
@@ -654,6 +664,16 @@ dependencies = [
  "serde_json",
  "tokio",
  "zbus",
+]
+
+[[package]]
+name = "omnibus-adapter-dnf"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "omnibus-contracts",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -691,6 +711,17 @@ dependencies = [
  "tempfile",
  "tokio",
  "ureq",
+]
+
+[[package]]
+name = "omnibus-adapter-kb-guides"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "omnibus-contracts",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -773,10 +804,13 @@ version = "0.1.0"
 dependencies = [
  "nix",
  "omnibus-adapter-alpm",
+ "omnibus-adapter-apt",
  "omnibus-adapter-atspi",
+ "omnibus-adapter-dnf",
  "omnibus-adapter-fs-xdg",
  "omnibus-adapter-journald",
  "omnibus-adapter-kb-archwiki",
+ "omnibus-adapter-kb-guides",
  "omnibus-adapter-nm",
  "omnibus-adapter-systemd1",
  "omnibus-adapter-xdg-portals",

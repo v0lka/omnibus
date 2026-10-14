@@ -1,0 +1,23 @@
+[package]
+name = "omnibus-adapter-apt"
+version.workspace = true
+edition.workspace = true
+description = "apt adapter: package read/write/history for the Debian/Ubuntu/Mint family; honest no-undo degradation."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
+omnibus-contracts = { path = "../omnibus-contracts" }
+async-trait = "0.1"
+serde_json = "1"
+# rt: spawn_blocking + the test runtime; process: apt/dpkg subprocesses;
+# time: the per-call budget; io-util: the bounded stdout/stderr pipe reads.
+tokio = { version = "1", features = ["rt", "process", "time", "io-util"] }
+
+[dev-dependencies]
+# Feature sets are additive across dependency groups: tests additionally need
+# the macros behind #[tokio::test] and the paused clock (time::pause/advance)
+# for the honest write-timeout legs.
+tokio = { version = "1", features = ["macros", "test-util"] }

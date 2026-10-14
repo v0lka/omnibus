@@ -8,8 +8,8 @@ The packages domain covers listing, inspecting, installing, removing, and - wher
 
 - `omnibus-contracts/src/spi/packages.rs` - the `PackageManager` trait; package DTOs in `omnibus-contracts/src/dto/packages.rs`, capability constants in `omnibus-contracts/src/capabilities.rs`
 - `omnibus-adapter-alpm/src/` - Arch/Manjaro provider (crate `alpm`; ALPM handles never leave the adapter)
-- `omnibus-adapter-apt/src/` (planned) - Debian/Ubuntu/Mint provider (backend choice: libapt vs CLI, ADR-002)
-- `omnibus-adapter-dnf/src/` (planned) - Fedora provider
+- `omnibus-adapter-apt/src/` - Debian/Ubuntu/Mint provider (CLI mapping per ADR-002: `dpkg-query`, `apt-cache`, `apt-get`, history from `/var/log/apt/history.log`)
+- `omnibus-adapter-dnf/src/` - Fedora provider (the dnf/dnf5 backend swap is resolved inside the adapter)
 - `omnibus-adapter-brew/src/` (planned) - macOS provider (MS3): formula + cask; `mas` as the optional App Store backend
 
 ## Capability and Tools

@@ -1,0 +1,193 @@
+# Omnibus CI — the T2 matrix (roadmap tasks 2.6.1, 2.6.2).
+#
+# The leg definitions live in ci/matrix/t2.yml (the single source of truth);
+# this workflow is the generic executor: the `matrix` job converts the
+# declarative file into a GitHub Actions strategy via ci/matrix/to_json.py,
+# and every container-capable leg runs
+#
+#   build -> contract suite (cargo test --workspace, R2) -> smoke demos
+#
+# inside its reference container. Honesty rules carried over from the
+# Manjaro track (.github/workflows/manjaro.yml):
+#
+#   * Mint has no official CI container: its leg runs the Mint 22.x base
+#     (Ubuntu 24.04) as a DOCUMENTED stand-in — package-family evidence, a
+#     smoke signal, never the Mint T2 guarantee. The real Mint VM leg (and
+#     the per-platform package-install legs of roadmap 2.6.1: native
+#     install -> daemon works, TTFM < 5 min) stays manual-dispatch only
+#     (T2_VM_ENABLED), a REQ-EXT run on real hardware.
+#   * The leg-classification job prints which legs ran as containers, which
+#     as stand-ins, and which were skipped — a skipped or stand-in leg is
+#     never reported as the executed guarantee.
+#   * CI has no upload credentials and never runs packaging/ppa/upload.sh:
+#     uploads are human-issued, out-of-band actions (the never-list). The
+#     packaging artifacts themselves are validated locally / in CI by
+#     ci/validate_packaging.py (Make target `packaging`).
+#
+# Debian bookworm is the on-the-floor T2 row: at-spi2 2.46 below the floor
+# hides `desktop.*` (specs/architecture/platform-matrix.md); the suite and
+# the honestly-skipping smoke demos are expected to pass, not to fake a
+# session that is not there.
+
+name: t2
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Sunday 04:42 UTC — the T2 track is not per-PR (the main `ci`
+    # workflow already gates every push/PR); this matrix guards drift on the
+    # distro containers.
+    - cron: "42 4 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t2-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  matrix:
+    name: validate + expand ci/matrix/t2.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      json: ${{ steps.expand.outputs.json }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate every packaging/matrix artifact (ci/validate_packaging.py)
+        # PyYAML is preinstalled on GitHub runners; locally `make packaging`
+        # runs the same script. A red validation has no override.
+        run: python3 ci/validate_packaging.py
+
+      - name: Expand the matrix file into the job strategy
+        id: expand
+        run: |
+          set -euo pipefail
+          {
+            echo "json<<JSON_EOF"
+            python3 ci/matrix/to_json.py < ci/matrix/t2.yml
+            echo "JSON_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  container-legs:
+    name: ${{ matrix.id }} (${{ matrix.container }}${{ matrix.standin && ' — stand-in' || '' }})
+    needs: [matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.json) }}
+    container:
+      image: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install session + tooling deps (per matrix.package-manager)
+        env:
+          PKGS: ${{ join(matrix.pkgs, ' ') }}
+        run: |
+          set -euo pipefail
+          case "${{ matrix.package-manager }}" in
+            apt)
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $PKGS
+              ;;
+            dnf)
+              dnf install -y $PKGS
+              ;;
+            *)
+              echo "::error::unsupported package-manager: ${{ matrix.package-manager }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Install Rust stable
+        # The distro rustc on the T2/T3 images sits below the edition-2024
+        # floor; the pinned-current toolchain is the build contract (see
+        # packaging/debian/control, packaging/fedora/omnibus.spec).
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Spec system validation
+        run: make specs
+
+      - name: Build the workspace
+        run: cargo build --workspace
+
+      - name: Contract suite (cargo test --workspace)
+        if: matrix.runs['contract-suite']
+        # R2: the same contract suite on every family, exactly as the
+        # matrix's runs.contract-suite field promises.
+        run: cargo test --workspace
+
+      - name: Smoke demos (honest skips when a backend is absent)
+        if: matrix.runs['smoke']
+        run: ci/smoke/run-demos.sh
+
+  vm-legs:
+    name: T2 VM legs (Mint VM + package-install, REQ-EXT)
+    # TODO(roadmap 2.6.1 / 2.6.2): this job stays SKIPPED until the true-VM
+    # legs exist:
+    #
+    #   1. Provision a Mint 22.x VM (X11-default session) and register it as
+    #      a self-hosted runner labeled exactly: mint-x11.
+    #   2. Provision one VM per T2 platform for the package-install legs and
+    #      add the repo variable T2_VM_ENABLED=true (Settings -> Secrets and
+    #      variables -> Actions -> Variables). While it is unset or false,
+    #      this job evaluates to false and is skipped — by design, so the
+    #      workflow never fakes a green install matrix.
+    #   3. The package-install legs run the roadmap 2.6.1 AC on real
+    #      hardware: `apt install` / `dnf install` from the channel
+    #      (packaging/debian + COPR), daemon starts, TTFM < 5 min, then the
+    #      smoke demos against the real session.
+    #   4. Follow docs/release-checklist.md (roadmap 2.6.2) for the tier
+    #      reporting: tier != capabilities divergences go into the release
+    #      report, never get papered over here.
+    if: github.event_name == 'workflow_dispatch' && vars.T2_VM_ENABLED == 'true'
+    runs-on: ${{ matrix.runner-label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner-label: mint-x11
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install from the channel + smoke against the real session
+        run: |
+          set -euo pipefail
+          # TODO(roadmap 2.6.1): assert the native install + TTFM budget:
+          #   time apt install ./omnibus_*.deb   (or dnf)
+          #   timeout 300 bash -c 'omnibusd --version && <tools/list probe>'
+          #   ci/smoke/run-demos.sh
+          echo "TODO(2.6.1): native install + TTFM + smoke on the real VM"
+
+  # The header promises every run prints which legs were real, which were
+  # stand-ins and which were skipped; this job is that print (always runs,
+  # green or red).
+  leg-classification:
+    name: print the leg classification (real vs stand-in vs skipped)
+    needs: [matrix, container-legs, vm-legs]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Classify this run's legs
+        env:
+          MATRIX_JSON: ${{ needs.matrix.outputs.json }}
+        run: |
+          set -euo pipefail
+          echo "leg classification for this run:"
+          echo "$MATRIX_JSON" | python3 -c '
+          import json, sys
+          for leg in json.load(sys.stdin)["include"]:
+              kind = "documented STAND-IN (base-OS container)" if leg["standin"] else "reference container"
+              print(f"  {leg[\"id\"]:16} {kind} — build+suite: {bool(leg[\"runs\"].get(\"contract-suite\"))}, smoke: {bool(leg[\"runs\"].get(\"smoke\"))}")
+          '
+          echo "  package-install:  REQ-EXT on every leg (never a CI claim; release-runbook work, roadmap 2.6.1)"
+          echo "  vm-legs:          ${{ github.event_name == 'workflow_dispatch' && vars.T2_VM_ENABLED == 'true' && 'real VM legs (dispatched, T2_VM_ENABLED=true)' || 'skipped (scheduled run or T2_VM_ENABLED unset/false) — package-install and Mint VM are REQ-EXT this run' }}"

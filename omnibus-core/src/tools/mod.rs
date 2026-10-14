@@ -1036,6 +1036,46 @@ pub fn schema_json(spec: &ToolSpec) -> serde_json::Value {
     json_schema(&spec.args_schema)
 }
 
+/// Ladder rung 1 marking for write-tool schemas (capability-model.md:
+/// "schema marks the limitation"): on a machine whose `pkg.undo` fact reports
+/// value `none` (apt: no transactional rollback), `pkg_install` and
+/// `pkg_remove` carry the degradation note — sourced from the caps entry's own
+/// `note` — while `pkg_undo` itself stays hidden through the ladder. Every
+/// other tool, and every other `pkg.undo` value, yields no note.
+pub fn degradation_note(core: &crate::Core, tool: &str) -> Option<String> {
+    if !matches!(tool, "pkg_install" | "pkg_remove") {
+        return None;
+    }
+    let entry = core.caps.entry(cap::PKG_UNDO)?;
+    let undo_is_none = entry
+        .value
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value == "none");
+    if !undo_is_none {
+        return None;
+    }
+    Some(
+        entry
+            .note
+            .clone()
+            .unwrap_or_else(|| String::from("undo unavailable (pkg.undo = none)")),
+    )
+}
+
+/// The schema JSON the facade serves for one visible tool: the generated
+/// schema plus, when ladder rung 1 applies ([`degradation_note`]), the
+/// degradation note as the schema's `description` (a JSON Schema annotation —
+/// instances stay as strict as serde).
+pub fn schema_json_annotated(core: &crate::Core, spec: &ToolSpec) -> serde_json::Value {
+    let mut schema = schema_json(spec);
+    if let (Some(note), Some(object)) = (degradation_note(core, &spec.name), schema.as_object_mut())
+    {
+        object.insert(String::from("description"), serde_json::Value::String(note));
+    }
+    schema
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1240,6 +1280,7 @@ mod tests {
                         family: DistroFamily::Manjaro,
                     },
                     capabilities: entries,
+                    floors: Vec::new(),
                 },
                 floors: Vec::new(),
             }

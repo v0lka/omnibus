@@ -33,10 +33,10 @@ impl Probe {
     /// package backend per family; NM is subsystem-level, not family-level;
     /// knowledge follows the per-distro Knowledge column of
     /// specs/architecture/platform-matrix.md — ArchWiki is the promised source
-    /// only on the Arch and Manjaro rows (Debian wiki, Ubuntu docs, Mint
-    /// docs/forums and Fedora docs adapters do not exist yet), so other
-    /// families get honest absence instead of a source the matrix does not
-    /// promise (R7).
+    /// only on the Arch and Manjaro rows, the apt/dnf rows promise their own
+    /// distro docs through `kb-guides` (Debian wiki, Ubuntu docs, Mint docs,
+    /// Fedora docs), and other families get honest absence instead of a
+    /// source the matrix does not promise (R7).
     fn adapter_candidates(family: DistroFamily, net_alive: bool) -> Vec<String> {
         let mut adapters: Vec<String> = vec![
             String::from("atspi"),
@@ -55,9 +55,16 @@ impl Probe {
         adapters.push(String::from("fs-xdg"));
         if matches!(family, DistroFamily::Arch | DistroFamily::Manjaro) {
             // Platform matrix, Knowledge column: ArchWiki (Arch) and ArchWiki +
-            // Manjaro overlay (Manjaro) only; every other family promises its
-            // own KB source, not ArchWiki.
+            // Manjaro overlay (Manjaro) only.
             adapters.push(String::from("kb-archwiki"));
+        }
+        if matches!(
+            family,
+            DistroFamily::Debian | DistroFamily::Ubuntu | DistroFamily::Mint | DistroFamily::Fedora
+        ) {
+            // Knowledge column, apt/dnf rows: the family's own distro docs
+            // (kb-guides), never ArchWiki (R7: no promised-but-absent source).
+            adapters.push(String::from("kb-guides"));
         }
         if net_alive {
             adapters.push(String::from("nm"));
@@ -394,6 +401,156 @@ mod tests {
         assert!(
             systemd1.alive,
             "degraded systemd is alive: svc_* must not hide"
+        );
+    }
+
+    #[test]
+    fn candidates_select_the_family_backend_and_knowledge_source() {
+        // Task 2.1.1 + the Knowledge column: exactly one pkg backend per
+        // family; kb-guides on the apt/dnf rows, kb-archwiki on the Arch rows,
+        // no family-specific adapter on Other (R7: no promised-but-absent
+        // source).
+        for family in [
+            DistroFamily::Debian,
+            DistroFamily::Ubuntu,
+            DistroFamily::Mint,
+        ] {
+            let candidates = Probe::adapter_candidates(family, false);
+            assert!(candidates.contains(&String::from("apt")), "{family:?}");
+            assert!(
+                candidates.contains(&String::from("kb-guides")),
+                "{family:?} promises its own distro docs"
+            );
+            assert!(
+                ["alpm", "dnf", "kb-archwiki"]
+                    .iter()
+                    .all(|a| !candidates.contains(&String::from(*a))),
+                "{family:?}: foreign-family candidates leaked"
+            );
+        }
+        let fedora = Probe::adapter_candidates(DistroFamily::Fedora, false);
+        assert!(fedora.contains(&String::from("dnf")));
+        assert!(fedora.contains(&String::from("kb-guides")));
+        assert!(
+            ["alpm", "apt", "kb-archwiki"]
+                .iter()
+                .all(|a| !fedora.contains(&String::from(*a)))
+        );
+        for family in [DistroFamily::Arch, DistroFamily::Manjaro] {
+            let candidates = Probe::adapter_candidates(family, false);
+            assert!(candidates.contains(&String::from("alpm")), "{family:?}");
+            assert!(
+                candidates.contains(&String::from("kb-archwiki")),
+                "{family:?}"
+            );
+            assert!(
+                ["apt", "dnf", "kb-guides"]
+                    .iter()
+                    .all(|a| !candidates.contains(&String::from(*a))),
+                "{family:?}: ArchWiki rows never promise kb-guides"
+            );
+        }
+        let other = Probe::adapter_candidates(DistroFamily::Other, false);
+        assert!(
+            ["alpm", "apt", "dnf", "kb-archwiki", "kb-guides"]
+                .iter()
+                .all(|a| !other.contains(&String::from(*a))),
+            "Other promises no family-specific adapter"
+        );
+        // NM stays subsystem-level: gated by bus liveness, not family.
+        assert!(
+            !Probe::adapter_candidates(DistroFamily::Fedora, false).contains(&String::from("nm"))
+        );
+        assert!(
+            Probe::adapter_candidates(DistroFamily::Fedora, true).contains(&String::from("nm"))
+        );
+    }
+
+    /// A Debian-family runner: bookworm/bullseye version line plus the
+    /// dpkg-query at-spi answer; `/usr/bin/apt` exists so `backends_present`
+    /// carries the family backend.
+    fn debian_runner(systemctl_line: &str, dpkg_atspi: &str) -> FakeRunner {
+        FakeRunner::default()
+            .stub("/usr/bin/systemctl --version", systemctl_line)
+            .stub(
+                "/usr/bin/dpkg-query -W -f=${Package}\\t${Version}\\n at-spi2-core",
+                dpkg_atspi,
+            )
+            .with_file(
+                "/etc/os-release",
+                "ID=debian\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"12\"\n",
+            )
+            .with_file("/proc/sys/kernel/osrelease", "6.1.0-18-amd64\n")
+            .with_file("/usr/bin/apt", "ELF")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn debian_bookworm_is_on_the_floor_and_selects_apt_with_guides() {
+        // AC 2.1.2, on-floor rung: bookworm ships systemd 252 exactly on the
+        // floor — the family pkg adapter stays a candidate for the composition
+        // root to activate.
+        let probe = Probe::system(std::sync::Arc::new(debian_runner(
+            "systemd 252 (252.30-1~deb12u1)\n",
+            "at-spi2-core\t2.44.0-1\n",
+        )));
+        let report = probe
+            .detect()
+            .await
+            .expect("detect never fails the session");
+        assert_eq!(report.distro.family, DistroFamily::Debian);
+        assert_eq!(report.systemd_version.as_deref(), Some("252"));
+        let systemd_floor = report
+            .floors
+            .iter()
+            .find(|f| f.component == "systemd")
+            .expect("systemd floor row");
+        assert!(systemd_floor.met, "252.0 == 252.0 floor: met");
+        assert!(systemd_floor.reason.is_none());
+        assert!(report.backends_present.contains(&String::from("apt")));
+        assert!(report.adapters_selected.contains(&String::from("apt")));
+        assert!(
+            report
+                .adapters_selected
+                .contains(&String::from("kb-guides"))
+        );
+        assert!(
+            !report
+                .adapters_selected
+                .contains(&String::from("kb-archwiki")),
+            "the Debian row promises Debian wiki, not ArchWiki"
+        );
+        assert!(
+            !report.adapters_selected.contains(&String::from("nm")),
+            "no NetworkManager bus in the fixture: nm stays hidden"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn debian_bullseye_below_floor_reports_candidates_but_floor_unmet() {
+        // AC 2.1.2, below-floor rung: the probe still reports the family truth
+        // (candidates, exact floor reason); *hiding* the pkg tools is the
+        // composition root's floor_met gate, never a candidate omission.
+        let probe = Probe::system(std::sync::Arc::new(debian_runner(
+            "systemd 247 (247.3-3+deb11u1)\n",
+            "at-spi2-core\t2.40.2-1\n",
+        )));
+        let report = probe.detect().await.expect("detect never fails");
+        let systemd_floor = report
+            .floors
+            .iter()
+            .find(|f| f.component == "systemd")
+            .expect("systemd floor row");
+        assert!(!systemd_floor.met, "247.0 < 252.0 floor");
+        assert_eq!(
+            systemd_floor.reason.as_deref(),
+            Some("systemd 247.0 < 252.0"),
+            "capabilities() must explain the exact reason"
+        );
+        assert!(report.adapters_selected.contains(&String::from("apt")));
+        assert!(
+            report
+                .adapters_selected
+                .contains(&String::from("kb-guides"))
         );
     }
 }

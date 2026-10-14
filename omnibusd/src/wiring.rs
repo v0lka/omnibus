@@ -175,6 +175,24 @@ async fn build_registry(
     {
         registry.packages = Some(Arc::new(adapter));
     }
+    // The apt/dnf rows of the Packages column (roadmap 2.3.x): the native
+    // family backend, attempted only when the ladder keeps the pkg family
+    // visible — below the systemd floor the family's tools stay hidden (AC
+    // 2.1.2: bullseye, systemd 247 < 252). A failed detection leaves the slot
+    // empty: the subsystem is honestly absent this session.
+    match pkg_candidate(platform) {
+        Some(PkgBackend::Apt) => {
+            if let Ok(adapter) = omnibus_adapter_apt::AptAdapter::detect().await {
+                registry.packages = Some(Arc::new(adapter));
+            }
+        }
+        Some(PkgBackend::Dnf) => {
+            if let Ok(adapter) = omnibus_adapter_dnf::DnfAdapter::detect().await {
+                registry.packages = Some(Arc::new(adapter));
+            }
+        }
+        None => {}
+    }
     if alive("xdg-desktop-portal")
         && let Ok(adapter) = omnibus_adapter_xdg_portals::PortalsAdapter::connect().await
     {
@@ -185,19 +203,27 @@ async fn build_registry(
     registry.files = Some(Arc::new(omnibus_adapter_fs_xdg::FsXdgAdapter::new(
         granted_write_paths(write_scopes),
     )));
-    // kb: ArchWiki + the Manjaro overlay when installed (task 2.5.2). Gated by
-    // the same DistroFamily condition the probe applies in `adapters_selected`
-    // (mirroring the alpm row of the platform matrix): off Arch/Manjaro the
-    // probe claims the subsystem absent, so the registry must not install it —
-    // whatever the probe did not select stays absent.
-    if matches!(
-        platform.distro.family,
-        DistroFamily::Arch | DistroFamily::Manjaro
-    ) {
-        let overlay = kb_overlay_dir();
-        registry.kb = Some(Arc::new(
-            omnibus_adapter_kb_archwiki::KbArchWikiAdapter::new(kb_cache_dir(), overlay),
-        ));
+    // kb: the Knowledge column of the platform matrix (task 2.5.2). Gated by
+    // the same family condition the probe applies in `adapters_selected`
+    // (mirroring the alpm row): off the promised rows the probe claims the
+    // subsystem absent, so the registry must not install it — whatever the
+    // probe did not select stays absent. The kb slot has no floor of its own
+    // (the ladder hides pkg tools below the systemd floor; it says nothing
+    // about reading distro docs).
+    match kb_candidate(platform.distro.family) {
+        Some(KbSource::ArchWiki) => {
+            let overlay = kb_overlay_dir();
+            registry.kb = Some(Arc::new(
+                omnibus_adapter_kb_archwiki::KbArchWikiAdapter::new(kb_cache_dir(), overlay),
+            ));
+        }
+        Some(KbSource::Guides) => {
+            registry.kb = Some(Arc::new(omnibus_adapter_kb_guides::KbGuidesAdapter::new(
+                kb_cache_dir(),
+                kb_guides_dir(),
+            )));
+        }
+        None => {}
     }
     // The probe itself is always present.
     registry.probe = Some(Arc::new(omnibus_probe::Probe::system(Arc::new(
@@ -247,6 +273,71 @@ fn kb_overlay_dir() -> Option<PathBuf> {
         xdg_dir("XDG_DATA_HOME", ".local/share").join("omnibus/kb-manjaro"),
     ];
     candidates.into_iter().find(|p| p.is_dir())
+}
+
+/// The guides root for `kb-guides` (apt/dnf rows of the Knowledge column):
+/// packaged root first, then a user-local one — the same overlay layout as
+/// kb-manjaro, one article directory per registered distro doc source. `None`
+/// means no packaged or local mirror exists; the adapter still serves cached
+/// articles and reports the sources honestly.
+fn kb_guides_dir() -> Option<PathBuf> {
+    let candidates = [
+        PathBuf::from("/usr/share/omnibus/kb-guides"),
+        xdg_dir("XDG_DATA_HOME", ".local/share").join("omnibus/kb-guides"),
+    ];
+    candidates.into_iter().find(|p| p.is_dir())
+}
+
+/// The package backend the composition root attempts for this report's family,
+/// decided before any I/O: the Packages column's family mapping plus the
+/// ladder gate — below the systemd floor the pkg family's tools stay hidden
+/// (AC 2.1.2: bookworm 252 is exactly on the floor and stays active; bullseye
+/// 247 < 252 hides the family even with the backend binary present). Arch and
+/// Manjaro are wired by the alpm row; `None` always means an empty slot.
+fn pkg_candidate(platform: &PlatformReport) -> Option<PkgBackend> {
+    let present = |name: &str| platform.backends_present.iter().any(|b| b == name);
+    let systemd_floor_met = platform
+        .floors
+        .iter()
+        .any(|f| f.component == "systemd" && f.met);
+    match platform.distro.family {
+        DistroFamily::Debian | DistroFamily::Ubuntu | DistroFamily::Mint
+            if systemd_floor_met && present("apt") =>
+        {
+            Some(PkgBackend::Apt)
+        }
+        DistroFamily::Fedora if systemd_floor_met && present("dnf") => Some(PkgBackend::Dnf),
+        _ => None,
+    }
+}
+
+/// The pkg backends wired on the apt/dnf rows (one active adapter per
+/// subsystem, §9; the native family wins when several backends coexist).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PkgBackend {
+    Apt,
+    Dnf,
+}
+
+/// The Knowledge source the platform matrix promises for the family, decided
+/// before any I/O: ArchWiki (+ the Manjaro overlay) on the Arch rows, the
+/// distro-docs guides (Debian wiki, Ubuntu docs, Mint docs, Fedora docs) on
+/// the apt/dnf rows, nothing on Other (R7: no promised-but-absent source).
+fn kb_candidate(family: DistroFamily) -> Option<KbSource> {
+    match family {
+        DistroFamily::Arch | DistroFamily::Manjaro => Some(KbSource::ArchWiki),
+        DistroFamily::Debian | DistroFamily::Ubuntu | DistroFamily::Mint | DistroFamily::Fedora => {
+            Some(KbSource::Guides)
+        }
+        DistroFamily::Other => None,
+    }
+}
+
+/// The knowledge providers wired per the matrix Knowledge column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KbSource {
+    ArchWiki,
+    Guides,
 }
 
 pub fn audit_fallback_path() -> PathBuf {
@@ -504,5 +595,169 @@ mod tests {
             ),
             Ok(PathBuf::from("/home/u/.config"))
         );
+    }
+
+    // --- Fixture reports: the composition root's family decisions. The
+    // selection logic is pure, so fixture reports pin it deterministically —
+    // the toolchain probes behind the decisions (apt-get/dnf --version) stay
+    // unmocked and only run on a real wire-up. ---
+
+    fn fixture_report(
+        family: DistroFamily,
+        backends: &[&str],
+        systemd_floor_met: bool,
+    ) -> PlatformReport {
+        PlatformReport {
+            distro: omnibus_contracts::dto::probe::DistroInfo {
+                id: String::from("fixture"),
+                name: String::from("Fixture Linux"),
+                release: String::new(),
+                family,
+            },
+            kernel: String::from("test"),
+            desktop: None,
+            session_kind: None,
+            systemd_version: systemd_floor_met.then(|| String::from("257")),
+            atspi_version: None,
+            liveness: vec![],
+            backends_present: backends.iter().map(|b| String::from(*b)).collect(),
+            floors: vec![omnibus_contracts::dto::probe::FloorStatus {
+                component: String::from("systemd"),
+                actual: None,
+                floor: String::from("252.0"),
+                met: systemd_floor_met,
+                reason: None,
+            }],
+            adapters_selected: vec![],
+            manjaro: None,
+        }
+    }
+
+    #[test]
+    fn pkg_candidate_selects_apt_and_dnf_on_their_families() {
+        // Packages column: the apt family wires apt, Fedora wires dnf — with
+        // the backend present and the systemd floor met.
+        for family in [
+            DistroFamily::Debian,
+            DistroFamily::Ubuntu,
+            DistroFamily::Mint,
+        ] {
+            let report = fixture_report(family, &["apt"], true);
+            assert_eq!(pkg_candidate(&report), Some(PkgBackend::Apt), "{family:?}");
+        }
+        let fedora = fixture_report(DistroFamily::Fedora, &["dnf"], true);
+        assert_eq!(pkg_candidate(&fedora), Some(PkgBackend::Dnf));
+        // Several coexisting backends: the native family backend wins (§9).
+        let mixed = fixture_report(DistroFamily::Mint, &["apt", "dnf", "pacman"], true);
+        assert_eq!(pkg_candidate(&mixed), Some(PkgBackend::Apt));
+    }
+
+    #[test]
+    fn pkg_candidate_stays_empty_without_backend_floor_or_family() {
+        // Missing backend: no detection attempt, the slot stays honestly empty.
+        assert_eq!(
+            pkg_candidate(&fixture_report(DistroFamily::Debian, &[], true)),
+            None
+        );
+        assert_eq!(
+            pkg_candidate(&fixture_report(DistroFamily::Fedora, &["apt"], true)),
+            None,
+            "a foreign backend never wires the family slot"
+        );
+        // Below the systemd floor the pkg family stays hidden (AC 2.1.2:
+        // bullseye, systemd 247 < 252) even with the backend present.
+        assert_eq!(
+            pkg_candidate(&fixture_report(DistroFamily::Debian, &["apt"], false)),
+            None
+        );
+        assert_eq!(
+            pkg_candidate(&fixture_report(DistroFamily::Fedora, &["dnf"], false)),
+            None
+        );
+        // No floor row at all is never read as met.
+        let mut no_floor_row = fixture_report(DistroFamily::Debian, &["apt"], true);
+        no_floor_row.floors.clear();
+        assert_eq!(pkg_candidate(&no_floor_row), None);
+        // Arch/Manjaro belong to the alpm row; Other promises no backend (§9).
+        assert_eq!(
+            pkg_candidate(&fixture_report(
+                DistroFamily::Arch,
+                &["apt", "pacman"],
+                true
+            )),
+            None
+        );
+        assert_eq!(
+            pkg_candidate(&fixture_report(DistroFamily::Manjaro, &["apt"], true)),
+            None
+        );
+        assert_eq!(
+            pkg_candidate(&fixture_report(
+                DistroFamily::Other,
+                &["apt", "dnf", "pacman"],
+                true
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn kb_candidate_follows_the_knowledge_column() {
+        assert_eq!(kb_candidate(DistroFamily::Arch), Some(KbSource::ArchWiki));
+        assert_eq!(
+            kb_candidate(DistroFamily::Manjaro),
+            Some(KbSource::ArchWiki)
+        );
+        for family in [
+            DistroFamily::Debian,
+            DistroFamily::Ubuntu,
+            DistroFamily::Mint,
+            DistroFamily::Fedora,
+        ] {
+            assert_eq!(kb_candidate(family), Some(KbSource::Guides), "{family:?}");
+        }
+        assert_eq!(kb_candidate(DistroFamily::Other), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_registry_wires_kb_on_promised_rows_and_nothing_on_other() {
+        // The registry-level view of the same decisions, through the real
+        // build_registry: kb installs exactly on the promised rows (pure
+        // construction), while the pkg slot stays empty on Other and below the
+        // floor even with the backend binary present — detect is never
+        // attempted for a hidden family (AC 2.1.2).
+        let scopes = std::collections::BTreeMap::new();
+        let other = build_registry(
+            &fixture_report(DistroFamily::Other, &["apt", "dnf", "pacman"], true),
+            &scopes,
+        )
+        .await;
+        assert!(other.packages.is_none(), "Other wires no pkg backend");
+        assert!(other.kb.is_none(), "Other wires no knowledge source");
+
+        let bullseye = build_registry(
+            &fixture_report(DistroFamily::Debian, &["apt"], false),
+            &scopes,
+        )
+        .await;
+        assert!(
+            bullseye.packages.is_none(),
+            "below the systemd floor the pkg family stays hidden"
+        );
+        assert!(bullseye.kb.is_some(), "knowledge is not floor-gated");
+
+        for family in [
+            DistroFamily::Debian,
+            DistroFamily::Ubuntu,
+            DistroFamily::Mint,
+            DistroFamily::Fedora,
+        ] {
+            let registry = build_registry(&fixture_report(family, &[], false), &scopes).await;
+            assert!(registry.kb.is_some(), "{family:?} promises its distro docs");
+        }
+        for family in [DistroFamily::Arch, DistroFamily::Manjaro] {
+            let registry = build_registry(&fixture_report(family, &[], false), &scopes).await;
+            assert!(registry.kb.is_some(), "{family:?} promises ArchWiki");
+        }
     }
 }

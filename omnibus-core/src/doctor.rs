@@ -11,6 +11,15 @@ use crate::Core;
 
 const EXECUTED_BY_HUMAN: &str = "human";
 
+/// The persistent-storage mutation (roadmap 2.5.1): creates the journal
+/// storage directory and restarts journald, so the next instance's probe
+/// reports `journal.persistent=true`. Always human-executed — through the
+/// doctor CLI, where every applied command is its own audit event.
+const JOURNAL_PERSISTENCE_COMMAND: &str = "sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal && sudo systemctl restart systemd-journald";
+
+/// The apply name of [`JOURNAL_PERSISTENCE_COMMAND`] (`omnibusd doctor --apply`).
+const JOURNAL_PERSISTENCE_NAME: &str = "enable journal persistence";
+
 fn finding(component: &str, severity: &str, detail: String) -> DoctorFinding {
     DoctorFinding {
         component: String::from(component),
@@ -91,6 +100,35 @@ pub async fn diagnose(core: &Core) -> DoctorReport {
     // --- Journal persistence (opt-in path on volatile distros; facts per 1.1.1) ---
     let persistent = core.caps.entry(cap::JOURNAL_PERSISTENT);
     match persistent {
+        // Roadmap 2.5.1, the flagship volatile-journald machine: the fact is
+        // `opt-in-required` and doctor walks the human through BOTH halves of
+        // the unlock — the out-of-band grant (reported by the grant findings
+        // below) and the storage mutation a grant alone never performs. The
+        // status is honest: `warn`, never `ok`, until the machine fact flips.
+        Some(entry) if entry.status == "opt-in-required" => {
+            findings.push(remedy(
+                finding(
+                    "journal",
+                    "warn",
+                    format!(
+                        "journal.persistent is opt-in-required ({}): the journal is volatile; \
+                         journal.prev_boot stays hidden until the grant is issued AND the \
+                         persistent storage exists",
+                        entry.adapter.clone().unwrap_or_default()
+                    ),
+                ),
+                String::from(
+                    "issue the grant (ready action below), then run the storage command below; \
+                     a grant alone never creates the storage — the change surfaces in the next \
+                     session's fresh probe",
+                ),
+            ));
+            commands.push(DoctorCommand {
+                name: String::from(JOURNAL_PERSISTENCE_NAME),
+                command: String::from(JOURNAL_PERSISTENCE_COMMAND),
+                executed_by: String::from(EXECUTED_BY_HUMAN),
+            });
+        }
         Some(entry) => findings.push(finding(
             "journal",
             "ok",
@@ -99,8 +137,8 @@ pub async fn diagnose(core: &Core) -> DoctorReport {
                 entry
                     .value
                     .as_ref()
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("true"),
+                    .map(serde_json::Value::to_string)
+                    .unwrap_or_else(|| String::from("unknown")),
                 entry.adapter.clone().unwrap_or_default()
             ),
         )),
@@ -109,10 +147,9 @@ pub async fn diagnose(core: &Core) -> DoctorReport {
             // fact, not by distro family. This storage suggestion fires when the
             // `journal.persistent` entry is absent entirely (journald adapter
             // inactive); a volatile machine with an active adapter reports the
-            // entry as `opt-in-required` and is served by the generic opt-in
-            // grant suggestion (`omnibusd grant journal.persistent`) instead —
-            // surfacing the storage command there remains roadmap 2.5.1 work.
-            // Either way the mutation is executed by a human.
+            // entry as `opt-in-required` and is served by the opt-in arm above —
+            // grant findings plus the same storage command. Either way the
+            // mutation is executed by a human.
             findings.push(remedy(
                 finding(
                     "journal",
@@ -126,10 +163,8 @@ pub async fn diagnose(core: &Core) -> DoctorReport {
                 ),
             ));
             commands.push(DoctorCommand {
-                name: String::from("enable journal persistence"),
-                command: String::from(
-                    "sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal && sudo systemctl restart systemd-journald",
-                ),
+                name: String::from(JOURNAL_PERSISTENCE_NAME),
+                command: String::from(JOURNAL_PERSISTENCE_COMMAND),
                 executed_by: String::from(EXECUTED_BY_HUMAN),
             });
         }

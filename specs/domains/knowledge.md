@@ -8,7 +8,7 @@ The knowledge domain gives the agent fix-it documentation per platform: search a
 
 - `omnibus-contracts/src/spi/kb.rs` - the `KnowledgeBase` trait; article DTOs in `omnibus-contracts/src/dto/kb.rs`, capability constants in `omnibus-contracts/src/capabilities.rs`
 - `omnibus-adapter-kb-archwiki/src/` - ArchWiki + Manjaro overlay provider (Arch, Manjaro)
-- `omnibus-adapter-kb-guides/src/` (planned) - distro docs (MS2) and Apple/SS64 guides (macOS, MS3)
+- `omnibus-adapter-kb-guides/src/` - distro docs (Debian wiki, Ubuntu docs, Mint docs/forums, Fedora docs); Apple/SS64 guides join the same crate on macOS (MS3)
 - `omnibus-core/src/doctor.rs` - consumes KB facts (adapter report/registry presence) among the subsystem facts doctor composes
 
 ## Capability and Tools

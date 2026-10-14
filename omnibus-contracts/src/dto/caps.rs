@@ -1,6 +1,7 @@
 //! The assembled `capabilities()` document, session info, and doctor report DTOs
 //! (specs/architecture/capability-model.md, domains/doctor.md). Field names are
-//! normative: `ver`, `status`, `value`, `adapter`, `note`, `remedy`.
+//! normative: `ver`, `status`, `value`, `adapter`, `note`, `remedy`; the
+//! document-level `floors` array explains below-floor rungs (ladder state 3).
 
 use crate::dto::probe::DistroInfo;
 
@@ -20,10 +21,23 @@ crate::dto!(
 );
 
 crate::dto!(
+    /// Why one version floor is not met, in the assembled document (ladder
+    /// rung 3: "capabilities() explains the reason", e.g. `systemd 247 < 252`).
+    /// Floors that are met need no explanation and never appear here.
+    pub struct FloorExplanation {
+        pub component: String,
+        pub reason: String,
+    }
+);
+
+crate::dto!(
     pub struct CapabilitiesDocument {
         pub contract_version: String,
         pub distro: DistroInfo,
         pub capabilities: Vec<CapabilityEntry>,
+        /// Additive explanation field (roadmap 2.1.2): the probe floor facts
+        /// that are NOT met, one entry per failing component.
+        pub floors: Vec<FloorExplanation>,
     }
 );
 

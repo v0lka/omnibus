@@ -45,12 +45,15 @@ forbidden (CI lint).
     "note": "the journal is volatile; past boots appear after persistent storage is granted",
     "remedy": "omnibusd grant journal.persistent" },
   { "name": "journal.persistent","ver": "1.0.0", "status": "opt-in-required",
-    "adapter": "journald",       "remedy": "omnibusd grant journal.persistent" } ] }
+    "adapter": "journald",       "remedy": "omnibusd grant journal.persistent" } ],
+  "floors": [ { "component": "systemd", "reason": "systemd 247.0 < 252.0" } ] }
 ```
 
 - `ver` - semver of the capability contract; `value` - typed value for polymorphic capabilities;
   `note` - degradation limitation; `remedy` - copy-paste command (same principle as the `ScopeDenied`
-  remedy); absence of a capability = absence of the entry.
+  remedy); absence of a capability = absence of the entry; `floors` - the additive document-level
+  array explaining every unmet version floor, one `{component, reason}` entry per failing
+  component (empty when all floors are met) - ladder rung 3 reaches the agent through it.
 
 ## Degradation Ladder (by increasing severity)
 

@@ -1,0 +1,28 @@
+# dput configuration for the Omnibus PPA (roadmap task 2.6.1).
+#
+# This is the upload config fragment for the Ubuntu LTS channel; Linux Mint
+# has no separate archive of its own for this purpose: Mint 22.x is built on
+# the Ubuntu 24.04 LTS base, so the PPA binaries built for Ubuntu 24.04
+# install unchanged on Mint (the inheritance is a base-OS fact, not a
+# packaging fork - see packaging/ppa/README.md).
+#
+# PLACEHOLDERS, ON PURPOSE: the PPA owner/series names below are stamped by
+# the release infrastructure once the Launchpad project exists. What is
+# fixed NOW and validated (ci/validate_packaging.py) is the security
+# posture: uploads are signed (allow_unsigned_uploads = 0) - the roadmap AC
+# "signature of all repositories" starts here, at the upload, not just at
+# the mirror.
+#
+# SECRETS POLICY: the signing key lives in the maintainer's GnuPG keyring
+# and the Launchpad credentials in the uploader's own dput/dput-ng config
+# outside this repository (~/.gnupg, ~/.dput.cf or ~/.dput.d/). Nothing
+# secret is ever committed here; this file carries hosts and names only.
+# A CI run has no credentials and performs no uploads by design (the
+# never-list: no write actions outside human-issued authority).
+
+[omnibus]
+fqdn = ppa.launchpad.net
+method = ftp
+incoming = ~omnibus/ubuntu/omnibus
+login = omnibus
+allow_unsigned_uploads = 0

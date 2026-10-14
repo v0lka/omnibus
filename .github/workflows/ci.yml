@@ -24,6 +24,9 @@
 #                      bash syntax, makepkg's own parse (--printsrcinfo), and
 #                      structural checks that package() installs exactly the
 #                      artifact paths build() produces (when packaging/ exists)
+#                      + ci/validate_packaging.py (the T2 packaging inputs and
+#                      the ci/matrix definitions, roadmap 2.6.1/2.6.2; also
+#                      `make packaging` locally)
 #                      + a release build of the workspace.
 #
 # A red gate has no override (Makefile note): every job below must stay green
@@ -244,7 +247,9 @@ jobs:
       - name: Install toolchain (pacman)
         run: |
           set -euo pipefail
-          pacman -Syu --noconfirm --needed git rust
+          # python + python-yaml: ci/validate_packaging.py (the T2 packaging +
+          # ci/matrix validation below) parses YAML artifacts via PyYAML.
+          pacman -Syu --noconfirm --needed git rust python python-yaml
 
       - name: PKGBUILD validation (honest subset)
         run: |
@@ -277,6 +282,17 @@ jobs:
           else
             echo "SKIP: packaging/PKGBUILD not present yet (lands with roadmap task 2.4.1 packaging work); nothing to lint"
           fi
+
+      - name: T2 packaging + ci/matrix validation (ci/validate_packaging.py)
+        run: |
+          set -euo pipefail
+          # The committed honest-local-subset validator for the T2 packaging
+          # inputs (packaging/debian, packaging/fedora, packaging/ppa) and
+          # the ci/matrix definitions + workflow wiring (roadmap 2.6.1 /
+          # 2.6.2). The same script runs locally via `make packaging` and as
+          # the first step of the t2 workflow; PyYAML comes from the pacman
+          # line above.
+          python3 ci/validate_packaging.py
 
       - name: Release build
         run: cargo build --release

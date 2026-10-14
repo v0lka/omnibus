@@ -1,0 +1,60 @@
+# Debian packaging input for the T2 channels (roadmap task 2.6.1).
+#
+# One debian/ source covers both T2 Debian releases - trixie (13) and
+# bookworm (12): debhelper-compat (= 13) exists in bookworm (13.11) and in
+# trixie, and the dependency set is identical on both (the probe decides at
+# runtime what this particular machine actually supports; a below-floor
+# component - e.g. at-spi2 2.46 on bookworm, which hides `desktop.*` - is a
+# documented row-level degradation per specs/architecture/platform-matrix.md,
+# never a packaging fork).
+#
+# Series suffixes (~deb12, ~deb13, ~ubuntu24.04) are NOT committed here:
+# they are applied to the changelog by the channel upload tooling
+# (packaging/ppa/upload.sh) when the source package is cut per channel.
+#
+# The binary is built from the repository tree the source package is cut
+# from (see debian/rules): one static omnibusd binary, adapters are selected
+# at run time, so there are no per-distro binary packages. Rust is edition
+# 2024: the release toolchain is provisioned by the repository build
+# infrastructure, because distro rustc floors on bookworm (1.63) sit below
+# the edition-2024 floor; cargo:native / rustc:native stay declared as the
+# toolchain contract. License: no LICENSE file exists in the repository yet;
+# the License field is intentionally absent from the copyright sense until
+# upstream designates one (same decision as packaging/PKGBUILD).
+
+Source: omnibus
+Section: utils
+Priority: optional
+Maintainer: Omnibus maintainers <maintainers@omnibus.invalid>
+Build-Depends:
+ debhelper-compat (= 13),
+ cargo:native,
+ rustc:native
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: omnibus
+Architecture: amd64
+Depends:
+ ${misc:Depends},
+ at-spi2-core,
+ systemd
+Recommends:
+ network-manager,
+ xdg-desktop-portal
+Description: omnibusd - uniform, auditable, least-privilege MCP API over a desktop OS
+ omnibusd gives AI agents a uniform, auditable, least-privilege MCP API over
+ a desktop OS: services, packages, journal, accessibility UI, files,
+ clipboard, screenshots, notifications, knowledge bases, network status.
+ All inference lives in the MCP client; the daemon performs zero model
+ calls.
+ .
+ The package installs one static binary plus read-only scope-manifest
+ templates under /etc/omnibus/scopes.d/. A fresh install exposes exactly the
+ read-only tool set; a human grants writes out-of-band by dropping
+ additional manifests there - there is no runtime consent API.
+ .
+ apt-backed packages have no transactional undo: pkg_undo honestly refuses
+ on this family (documented T2 degradation, not a defect). The daemon
+ degrades along the R3 ladder when an optional component (NetworkManager,
+ xdg-desktop-portal) is absent; capabilities() always reports the truth.

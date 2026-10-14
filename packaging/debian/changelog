@@ -1,0 +1,9 @@
+omnibus (0.1.0) unstable; urgency=medium
+
+  * Initial in-repo packaging input for the T2 channels (roadmap task
+    2.6.1): one debian/ source builds for trixie and bookworm; channel
+    series suffixes (~deb12, ~deb13, ~ubuntu24.04) are applied to the
+    version by the upload tooling (packaging/ppa/upload.sh), never
+    committed here.
+
+ -- Omnibus maintainers <maintainers@omnibus.invalid>  Wed, 14 Oct 2026 00:00:00 +0000

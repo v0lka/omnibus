@@ -1,0 +1,143 @@
+# T2 QA matrix — the declarative definition (roadmap task 2.6.2).
+#
+# This file is the source of truth for the QA legs; .github/workflows/t2.yml
+# reads it through ci/matrix/to_json.py and turns every `kind: container`
+# leg into a real CI job. The tiers/levels below mirror
+# specs/architecture/platform-matrix.md exactly — the matrix there is
+# normative, this file is its CI projection.
+#
+# Field vocabulary (validated by ci/validate_packaging.py):
+#   tier:    t1 | t2 | t3                          — the spec's promise tier
+#   level:   full | smoke+contract | build          — what the leg must run
+#   kind:    container | vm | owned-elsewhere       — where the leg executes
+#   runs:    build / contract-suite / smoke → true|false
+#            package-install → "req-ext" ALWAYS (see below)
+#
+# REQ-EXT INVARIANT: package-install is "req-ext" on every leg, never a CI
+# step. Installing the native package on a real machine with a real desktop
+# is the roadmap 2.6.1 AC ("install via the native manager → daemon works,
+# TTFM < 5 min"); containers have no session to exercise the daemon
+# honestly, so CI never claims that leg — it stays a release-runbook item
+# (docs/release-checklist.md, roadmap 2.6.2), the same REQ-EXT boundary as
+# the Manjaro VM legs in .github/workflows/manjaro.yml.
+#
+# HONEST-STAND-IN RULE (house style, mirroring manjaro.yml): a leg whose
+# real target has no CI container (Mint) runs a documented stand-in and is
+# classified as such by the workflow's leg-classification job — a stand-in
+# is a smoke signal, never the T2 guarantee. The guarantee lives on the
+# vm legs, which stay manual-dispatch + REQ-EXT until real runners exist.
+
+version: 1
+
+# All eight Linux platforms of the roadmap 2.6.2 matrix; tiers per
+# specs/architecture/platform-matrix.md (Tier claims in release notes always
+# match that spec — the validator cross-checks the ids below).
+legs:
+  # ---- T1: full contract, owned by the existing workflows ----
+  - id: arch
+    tier: t1
+    level: full
+    kind: owned-elsewhere
+    owner: .github/workflows/ci.yml
+
+  - id: manjaro
+    tier: t1
+    level: full
+    kind: owned-elsewhere
+    owner: .github/workflows/manjaro.yml
+
+  # ---- T2: full read + safe write; smoke on reference versions + the
+  # contract suite per family (roadmap 2.6.2) ----
+  - id: debian-trixie
+    tier: t2
+    level: smoke+contract
+    kind: container
+    container: debian:trixie
+    package-manager: apt
+    pkgs: [git, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    runs:
+      build: true
+      contract-suite: true
+      smoke: true
+      package-install: req-ext
+
+  - id: debian-bookworm
+    tier: t2
+    level: smoke+contract
+    kind: container
+    container: debian:bookworm
+    package-manager: apt
+    # Bookworm is T2 on the floor: at-spi2 2.46 sits below the floor, so
+    # `desktop.*` degrades hidden (a documented, honest row-level
+    # degradation) — the leg still runs the suite; the honest-skip smoke
+    # demos are expected to skip the desktop write legs, not fail.
+    pkgs: [git, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    runs:
+      build: true
+      contract-suite: true
+      smoke: true
+      package-install: req-ext
+
+  - id: ubuntu-lts
+    tier: t2
+    level: smoke+contract
+    kind: container
+    container: ubuntu:24.04
+    package-manager: apt
+    pkgs: [git, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    runs:
+      build: true
+      contract-suite: true
+      smoke: true
+      package-install: req-ext
+
+  - id: mint
+    tier: t2
+    level: smoke+contract
+    kind: vm
+    # No official Mint CI container exists. The stand-in is the Mint 22.x
+    # base (Ubuntu 24.04) container: package-family evidence, not the Mint
+    # guarantee (X11-default session, Mint-specific session stack are VM
+    # facts). The real Mint leg is manual-dispatch only (T2_VM_ENABLED).
+    standin-container: ubuntu:24.04
+    standin-package-manager: apt
+    standin-pkgs: [git, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    package-manager: apt
+    vm-note: Mint 22.x on the Ubuntu 24.04 base; X11-default desktop stack
+    runs:
+      build: true
+      contract-suite: true
+      smoke: true
+      package-install: req-ext
+
+  - id: fedora
+    tier: t2
+    level: smoke+contract
+    kind: container
+    # fedora:latest — the T2 smoke rides the freshest portal interfaces
+    # (specs/architecture/platform-matrix.md). Pinning a specific release is
+    # release-runbook work (docs/release-checklist.md); CI tracks latest on
+    # purpose so portal drift is caught, not accumulated.
+    container: fedora:latest
+    package-manager: dnf
+    pkgs: [git, at-spi2-core, dbus, python3, python3-pyyaml, curl, ca-certificates, gcc]
+    runs:
+      build: true
+      contract-suite: true
+      smoke: true
+      package-install: req-ext
+
+  # ---- T3: community; the build exists, capabilities() honest, no
+  # guarantees (roadmap 2.6.2: bullseye — build only) ----
+  - id: debian-bullseye
+    tier: t3
+    level: build
+    kind: container
+    container: debian:bullseye
+    package-manager: apt
+    pkgs: [git, python3, python3-yaml, curl, ca-certificates]
+    runs:
+      build: true
+      contract-suite: false
+      smoke: false
+      package-install: req-ext
