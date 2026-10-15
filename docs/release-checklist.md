@@ -22,7 +22,7 @@ Run from the repo root, in this order. A red gate has no override.
 | G6 | R4 boundary lints | `cargo run -p omnibus-lints --bin omnibus-lints` | `OK (R4-COP, R4-NATIVE, R4-CON, R4-EDGES green)` |
 | G7 | R4 red/green fixtures | `cargo test -p omnibus-lints --test fixtures` | 10 passed, 0 failed |
 | G8 | Coverage floor | `cargo llvm-cov --workspace --summary-only --fail-under-lines 75` | exit 0 |
-| G9 | Packaging + matrix validator | `make packaging` | `all green: 129 checks passed` |
+| G9 | Packaging + matrix validator | `make packaging` | `all green: 150 checks passed` |
 | G10 | Smoke demos | `ci/smoke/run-demos.sh` | `all demos passed (skips are honest and allowed)` |
 
 Notes:
@@ -83,6 +83,13 @@ run — no action needed unless a check fails):
 
 Human, release-time actions:
 
+- [ ] REQ-EXT — verify every channel build host BEFORE cutting binaries: the
+      builder's rustc must meet the edition-2024 floor (>= 1.85; this
+      packaging set ships no toolchain of its own), and the source package /
+      SRPM must carry the vendored dependency tree (`cargo vendor`, see
+      packaging/README.md "Build hosts") because the builders are
+      network-isolated. A series whose rustc sits below the floor gets
+      source-only or prebuilt-binary uploads instead of a binary build.
 - [ ] REQ-EXT — publish the signed channels (PPA upload via
       `packaging/ppa/upload.sh`, Debian repo, COPR build), then the
       fresh-machine no-trust check on each channel: on a clean VM without

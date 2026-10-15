@@ -17,7 +17,14 @@ omnibus-probe = { path = "../omnibus-probe" }
 omnibus-adapter-atspi = { path = "../omnibus-adapter-atspi" }
 omnibus-adapter-journald = { path = "../omnibus-adapter-journald" }
 omnibus-adapter-systemd1 = { path = "../omnibus-adapter-systemd1" }
-omnibus-adapter-alpm = { path = "../omnibus-adapter-alpm" }
+# Family-conditional: the alpm adapter links the SYSTEM libalpm through
+# pkg-config (alpm-sys has no vendored fallback), so it can only build where
+# libalpm exists — Arch/Manjaro. Cross-family build environments (the T2 CI
+# legs, the deb/rpm channels) build the daemon WITHOUT it:
+# `cargo build --workspace --no-default-features`. That is also the honest
+# product shape for a Debian/Fedora package: its family backend is apt/dnf,
+# and the probe + ladder hide the absent alpm row anyway.
+omnibus-adapter-alpm = { path = "../omnibus-adapter-alpm", optional = true }
 omnibus-adapter-apt = { path = "../omnibus-adapter-apt" }
 omnibus-adapter-dnf = { path = "../omnibus-adapter-dnf" }
 omnibus-adapter-xdg-portals = { path = "../omnibus-adapter-xdg-portals" }
@@ -35,6 +42,13 @@ toml = "0.9"
 
 [dev-dependencies]
 tempfile = "3"
+
+[features]
+default = ["family-alpm"]
+# The alpm row of the Packages column (Arch/Manjaro). Off = the daemon builds
+# and runs without the system libalpm; the packages slot is then filled by the
+# family backend the probe selects (apt/dnf) or stays honestly absent.
+family-alpm = ["dep:omnibus-adapter-alpm"]
 
 [[bin]]
 name = "omnibusd"

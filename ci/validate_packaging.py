@@ -43,6 +43,19 @@ except ImportError:  # pragma: no cover
 
 REPO = Path(__file__).resolve().parent.parent
 
+# The channel build command, byte-identical in BOTH channel inputs
+# (debian/rules, fedora %build) and mirroring the T2 CI legs
+# (.github/workflows/t2.yml): the alpm adapter links the SYSTEM libalpm via
+# pkg-config (alpm-sys has no vendored fallback), so the cross-family build
+# drops omnibusd's family-alpm feature (--no-default-features) and excludes
+# the omnibus-adapter-alpm member entirely (--exclude) — the same contract
+# the CI container legs run. gcc covers ring's C compiler (ureq -> rustls in
+# kb-archwiki); with alpm excluded, no pkg-config/libalpm is needed.
+CHANNEL_BUILD_CMD = (
+    "cargo build --workspace --no-default-features "
+    "--exclude omnibus-adapter-alpm --release --offline"
+)
+
 # The pass/fail journal, printed with per-section headers; failures never
 # abort the remaining checks — one run shows the full damage.
 _passed = 0
@@ -189,8 +202,14 @@ def validate_debian() -> None:
         re.search(r"^%:\n\tdh \$@", rules, re.MULTILINE) is not None,
     )
     check(
-        "debian/rules: builds via cargo build --release (repo-tree convention)",
-        "cargo build --release" in rules,
+        "debian/rules: builds via the shared channel build command "
+        "(--workspace --no-default-features --exclude omnibus-adapter-alpm --release --offline: "
+        "vendored deps, builders offline, alpm excluded)",
+        CHANNEL_BUILD_CMD in rules,
+    )
+    check(
+        "debian/rules: states the vendoring contract (source package ships vendor/)",
+        "cargo vendor" in rules,
     )
     check(
         "debian/rules: hermetic package build (dh_auto_test overridden off)",
@@ -327,8 +346,18 @@ def validate_fedora() -> None:
 
     sections = spec_sections(spec)
     check(
-        "spec: %build runs cargo build --release",
-        "cargo build --release" in sections.get("build", ""),
+        "spec: %build runs the shared channel build command "
+        "(--workspace --no-default-features --exclude omnibus-adapter-alpm --release --offline: "
+        "vendored deps, builders offline, alpm excluded)",
+        CHANNEL_BUILD_CMD in sections.get("build", ""),
+    )
+    check(
+        "spec: the SRPM assembly step is told to cut the vendor tree (offline contract)",
+        "cargo vendor" in spec,
+    )
+    check(
+        "spec: states the rustc floor for the chroot (edition 2024 = rustc >= 1.85)",
+        "1.85" in spec,
     )
     install = sections.get("install", "")
     check(
@@ -378,6 +407,94 @@ def validate_fedora() -> None:
 # packaging/ppa
 # --------------------------------------------------------------------------
 
+def validate_secrets_gate_is_alive() -> None:
+    """The dput.cf secrets gate must be able to FAIL (a guard that cannot
+    fail certifies nothing): pinned red/green here against synthetic host
+    blocks — no repo file is touched, and the scanner never scans this file
+    anyway, so the literal below stays inert."""
+    section("secrets gate red/green (the guard must be able to fail)")
+    gate = lambda host: not ({"password", "secret", "key"} & {k.lower() for k in host})  # noqa: E731
+    check(
+        "secrets gate rejects a Password-bearing host (red pin)",
+        gate({"username": "owner", "Password": "hunter2"}) is False,
+    )
+    check(
+        "secrets gate rejects a key-named host entry (red pin)",
+        gate({"username": "owner", "Key": "/home/x/id_ed25519"}) is False,
+    )
+    check(
+        "secrets gate passes a names-only host (green pin)",
+        gate({"username": "owner", "fqdn": "ppa.launchpad.net"}) is True,
+    )
+
+
+def validate_channel_build_contract() -> None:
+    """The channel build contract (offline builders + the edition-2024 rustc
+    floor), scoped honestly: the packaging ships no toolchain of its own, so
+    the floor constraint must be STATED in every input that promises a binary
+    build — and the old unowned 'provisioned by the repository build
+    infrastructure' claim must stay gone (a promise with no owner is a
+    deterministic builder failure)."""
+    section("channel build contract (offline + rustc floor, honestly scoped)")
+    control_text = read("packaging/debian/control")
+    check(
+        "debian/control: states the builder rustc floor (edition 2024 = rustc >= 1.85)",
+        "1.85" in control_text,
+    )
+    check(
+        "debian/control: no unowned provisioning promise (the 'provisioned by the repository "
+        "build infrastructure' claim is gone)",
+        "provisioned by the repository build infrastructure" not in control_text,
+    )
+    spec = read("packaging/fedora/omnibus.spec")
+    check(
+        "fedora spec: states the chroot rustc floor (1.85) and re-verification duty",
+        "1.85" in spec,
+    )
+    readme = read("packaging/README.md")
+    check(
+        "packaging/README.md: documents the offline + floor-gated build-host contract",
+        "1.85" in readme and "cargo vendor" in readme,
+    )
+    checklist = read("docs/release-checklist.md")
+    check(
+        "release checklist: the release owner re-verifies the rustc floor before cutting binaries",
+        "1.85" in checklist,
+    )
+    # The trio together is the vendoring contract: upload.sh cuts the vendor
+    # tree into the source package, and BOTH package builds run --offline
+    # (a builder missing vendor/ fails loudly instead of reaching for the
+    # network).
+    upload_text = (REPO / "packaging/ppa/upload.sh").read_text(encoding="utf-8")
+    rules = (REPO / "packaging/debian/rules").read_text(encoding="utf-8")
+    spec_build = spec_sections(spec).get("build", "")
+    check(
+        "channels: the vendoring wiring is complete (upload.sh cuts vendor/, rules + spec build "
+        "the shared channel command offline)",
+        "cargo vendor --locked vendor" in upload_text
+        and CHANNEL_BUILD_CMD in rules
+        and CHANNEL_BUILD_CMD in spec_build,
+    )
+    # The cross-family exclusion is the load-bearing half of the channel
+    # command: without it the build compiles omnibus-adapter-alpm, whose
+    # alpm-sys build script needs the system libalpm via pkg-config — a
+    # deterministic failure on every deb/COPR builder. Pinned per-input so a
+    # regression in either channel alone is named, not just the pair.
+    check(
+        "debian/rules: alpm exclusion pinned (--no-default-features drops the family-alpm wiring, "
+        "--exclude omnibus-adapter-alpm keeps the member out — its system-libalpm link cannot "
+        "build here; same contract as the T2 CI legs)",
+        "--no-default-features" in rules and "--exclude omnibus-adapter-alpm" in rules,
+    )
+    check(
+        "fedora spec: alpm exclusion pinned (%build runs --no-default-features + "
+        "--exclude omnibus-adapter-alpm — system libalpm is absent in the COPR chroot; "
+        "same contract as the T2 CI legs)",
+        "--no-default-features" in spec_build
+        and "--exclude omnibus-adapter-alpm" in spec_build,
+    )
+
+
 def validate_ppa() -> None:
     section("packaging/ppa (T2 channels: Ubuntu LTS, Mint by inheritance)")
 
@@ -398,9 +515,13 @@ def validate_ppa() -> None:
             "dput.cf: allow_unsigned_uploads = 0 (the signing AC starts at the upload)",
             host.get("allow_unsigned_uploads", "1") == "0",
         )
+        # The intended intersection test (a set is never `in` a set of
+        # strings — the previous form `{"password", ...} not in {...}` could
+        # never fail and certified nothing): the gate is red/green-pinned by
+        # validate_secrets_gate_is_alive() below.
         check(
             "dput.cf: carries names only — no login secrets beyond a username",
-            {"password", "secret", "key"} not in {k.lower() for k in host},
+            not ({"password", "secret", "key"} & {k.lower() for k in host}),
         )
 
     upload = REPO / "packaging/ppa/upload.sh"
@@ -416,8 +537,20 @@ def validate_ppa() -> None:
     )
     check("upload.sh: set -euo pipefail", "set -euo pipefail" in text)
     check(
-        "upload.sh: validates the series suffix before it reaches sed/dpkg",
-        "case $suffix in" in text and "[A-Za-z0-9.+-]" in text,
+        "upload.sh: validates the FULL series suffix (anchored bash regex) before it reaches sed/dpkg",
+        re.search(r"\[\[ ! \$suffix =~ \^~\[A-Za-z0-9\.\+-\]\+\$ ?\]\]", text) is not None,
+    )
+    check(
+        "upload.sh: cuts the vendored dependency tree into the source package (offline builders)",
+        re.search(r"cargo vendor --locked vendor > \.cargo/config\.toml", text) is not None,
+    )
+    check(
+        "upload.sh: dpkg-buildpackage runs from $workdir/src (artifacts land in the trap-cleaned parent)",
+        'mkdir "$workdir/src"' in text and 'cd "$workdir/src"' in text,
+    )
+    check(
+        "upload.sh: exactly-one .changes lookup via nullglob + count (no literal-glob [ -f ] miss)",
+        "shopt -s nullglob" in text and '[ "$#" -ne 1 ]' in text,
     )
     check(
         "upload.sh: applies the suffix to this upload only (committed changelog stays bare)",
@@ -525,17 +658,20 @@ def validate_matrix() -> None:
             )
         if tier == "t2":
             check(
-                f"matrix: {leg_id} (t2) runs build + contract-suite + smoke",
+                f"matrix: {leg_id} (t2) runs build + contract-suite + smoke + specs",
                 runs.get("build") is True
                 and runs.get("contract-suite") is True
-                and runs.get("smoke") is True,
+                and runs.get("smoke") is True
+                and runs.get("specs") is True,
             )
         if tier == "t3":
             check(
-                f"matrix: {leg_id} (t3) is build-only",
+                f"matrix: {leg_id} (t3) is build-only "
+                "(no suite, no smoke, no spec validation on the distro Python)",
                 runs.get("build") is True
                 and runs.get("contract-suite") is False
-                and runs.get("smoke") is False,
+                and runs.get("smoke") is False
+                and runs.get("specs") is False,
             )
         if kind == "container":
             expected_image = EXPECTED_CONTAINERS.get(leg_id)
@@ -633,8 +769,24 @@ def validate_workflows() -> None:
         ("T2_VM_ENABLED", "gates the REQ-EXT VM legs on a repo variable"),
         ("leg-classification", "prints the honest leg classification"),
         ("package-install", "names the req-ext leg in the classification"),
+        (
+            "--no-default-features --exclude omnibus-adapter-alpm",
+            "cross-family build contract: no system libalpm on non-Arch legs",
+        ),
+        (
+            "matrix.runs['specs']",
+            "gates the spec-validation step by the leg's declared scope",
+        ),
+        (
+            "needs.vm-legs.result",
+            "derives the vm-legs verdict from the job outcome, never the variable",
+        ),
     ]:
         check(f"t2.yml: {what}", needle in t2)
+    check(
+        "t2.yml: the vm-legs placeholder fails loudly (no green TODO no-op)",
+        "exit 1" in t2.split("vm-legs:")[1].split("leg-classification:")[0],
+    )
 
 
 def validate_docs() -> None:
@@ -699,6 +851,8 @@ def main() -> int:
     validate_debian()
     validate_fedora()
     validate_ppa()
+    validate_secrets_gate_is_alive()
+    validate_channel_build_contract()
     validate_matrix()
     validate_workflows()
     validate_docs()

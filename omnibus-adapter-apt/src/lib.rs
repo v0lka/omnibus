@@ -47,8 +47,11 @@ use tokio::io::AsyncReadExt;
 pub const NF_APT: i32 = 1;
 /// `NativeFailure` code: the named package is neither installed nor available.
 pub const NF_PKG_NOT_FOUND: i32 = 2;
-/// `NativeFailure` code: a transaction failed (the apt exit status is
-/// preserved; stderr text travels in the payload).
+/// `NativeFailure` code: a native invocation failed (the code space stays the
+/// closed, documented NF_* set — the raw apt/dpkg exit status is preserved in
+/// the payload text, `... failed with exit status 100: <stderr>`, never as the
+/// machine-readable code a client would have to know apt's exit codes to
+/// read).
 pub const NF_TRANSACTION: i32 = 3;
 /// `NativeFailure` code: the history log cannot be read.
 pub const NF_LOG_READ: i32 = 4;
@@ -297,14 +300,23 @@ async fn capture_bounded(
             });
         }
         if !status.success() {
+            // Every nonzero exit maps to the declared NF_TRANSACTION code: the
+            // NativeFailure code space is the closed NF_* set (the error
+            // taxonomy treats adapter codes as a documented set), so raw apt/
+            // dpkg exit codes never leak into it. The raw status still travels
+            // — in the payload text, alongside the stderr diagnostics.
             let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+            let reason = match status.code() {
+                Some(code) => format!("exit status {code}"),
+                None => String::from("a signal"),
+            };
             let payload = if stderr.is_empty() {
-                format!("{program} {args:?} exited with {status:?}")
+                format!("{program} {args:?} failed with {reason}")
             } else {
-                stderr
+                format!("{program} failed with {reason}: {stderr}")
             };
             return Err(ContractError::NativeFailure {
-                code: status.code().unwrap_or(NF_APT),
+                code: NF_TRANSACTION,
                 payload,
             });
         }
@@ -411,7 +423,13 @@ fn strip_arch(name: &str) -> &str {
 }
 
 /// Parses the `dpkg-query -W -f='${Status}\t${binary:Package}\t${Version}\n'`
-/// table, keeping only fully installed packages.
+/// table, keeping every INSTALLED package. dpkg's Status field is the triple
+/// `<want> <flag> <status>`, and both installed wants count: `install ok
+/// installed` and `hold ok installed` — a package pinned by `apt-mark hold`
+/// (kernels, drivers) is installed all the same, and dropping it would make
+/// `pkg_list` report an incomplete installed set that disagrees with
+/// `pkg_info` about the same machine. Non-installed statuses (`config-files`,
+/// `deinstall ok …`) keep their skip.
 fn parse_installed_table(stdout: &[u8]) -> Vec<PackageBrief> {
     String::from_utf8_lossy(stdout)
         .lines()
@@ -420,11 +438,14 @@ fn parse_installed_table(stdout: &[u8]) -> Vec<PackageBrief> {
             let status = fields.next()?.trim();
             let name = fields.next()?;
             let version = fields.next()?;
-            (status == "install ok installed").then(|| PackageBrief {
-                name: String::from(strip_arch(name.trim())),
-                version: String::from(version.trim()),
-                description: None,
-                repo: None,
+            let triple = status.split_whitespace().collect::<Vec<_>>();
+            matches!(triple.as_slice(), ["install" | "hold", "ok", "installed"]).then(|| {
+                PackageBrief {
+                    name: String::from(strip_arch(name.trim())),
+                    version: String::from(version.trim()),
+                    description: None,
+                    repo: None,
+                }
             })
         })
         .collect()
@@ -560,6 +581,49 @@ fn split_search_line(line: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// The dpkg package-name grammar (Debian policy): lowercase letters, digits,
+/// `+`, `-`, `.`, starting with an alphanumeric. Anything else never reaches
+/// the native argv: apt-get parses leading-dash elements as options, so an
+/// unvalidated "package name" would change what the privileged command does —
+/// `-f` is the fix-broken repair transaction with zero package names,
+/// `-o=APT::Get::AllowUnauthenticated=true` downgrades verification, a
+/// `/path/to.deb` turns the install into a local-deb installer.
+fn is_deb_pkg_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '-' | '.'))
+}
+
+/// The honest refusal for a name outside the grammar: the same
+/// [`NF_PKG_NOT_FOUND`] contract the unknown-package path answers (a name the
+/// grammar rejects can never name a Debian package), raised BEFORE any native
+/// work.
+fn pkg_name_refused(name: &str) -> ContractError {
+    ContractError::NativeFailure {
+        code: NF_PKG_NOT_FOUND,
+        payload: format!(
+            "pkg-not-found: {name:?} is not a valid package name (expected the dpkg name grammar: \
+             lowercase alphanumerics plus + - .)"
+        ),
+    }
+}
+
+/// Closes the one injection vector a search term has: a LEADING DASH makes
+/// apt-cache parse the term as an option set instead of a query. Search terms
+/// are otherwise free text on this contract (the alpm family matches
+/// descriptions too), so the full package-name grammar does not apply here —
+/// the option shape does. The refusal answers before any native work.
+fn search_term_refused(query: &str) -> ContractError {
+    ContractError::NativeFailure {
+        code: NF_PKG_NOT_FOUND,
+        payload: format!(
+            "pkg-not-found: {query:?} is parsed as an option, not a search term (terms must not \
+             start with '-')"
+        ),
+    }
+}
+
 /// Builds the non-interactive transaction argv (pinned by tests, roadmap
 /// 2.2.2): options first (`-y`, pty suppressed), then the command and target.
 fn transaction_args(command: &str, name: &str) -> [String; 4] {
@@ -652,6 +716,9 @@ impl PackageManager for AptAdapter {
     }
 
     async fn info(&self, name: String) -> Result<PackageInfo, ContractError> {
+        if !is_deb_pkg_name(&name) {
+            return Err(pkg_name_refused(&name));
+        }
         let policy_args = [String::from("policy"), name.clone()];
         let captured = self
             .run(&self.inner.programs.apt_cache, &policy_args)
@@ -703,6 +770,9 @@ impl PackageManager for AptAdapter {
     }
 
     async fn search(&self, query: PackageSearch) -> Result<Vec<PackageBrief>, ContractError> {
+        if query.query.trim_start().starts_with('-') {
+            return Err(search_term_refused(&query.query));
+        }
         let args = [String::from("search"), query.query];
         let captured = self.run(&self.inner.programs.apt_cache, &args).await?;
         Ok(parse_search_lines(&captured.stdout, query.limit))
@@ -712,6 +782,12 @@ impl PackageManager for AptAdapter {
         &self,
         request: PackageNameRequest,
     ) -> Result<TransactionResult, ContractError> {
+        // The name is the last element of a privileged apt-get argv: the
+        // grammar gate comes first, before any native work (R5/R6 — the
+        // granted call may never name an option set instead of a package).
+        if !is_deb_pkg_name(&request.name) {
+            return Err(pkg_name_refused(&request.name));
+        }
         let args = transaction_args("install", &request.name);
         self.run_write(&self.inner.programs.apt_get, &args).await?;
         let version_applied = advisory_version(&self.inner, &request.name).await;
@@ -725,6 +801,9 @@ impl PackageManager for AptAdapter {
         &self,
         request: PackageNameRequest,
     ) -> Result<TransactionResult, ContractError> {
+        if !is_deb_pkg_name(&request.name) {
+            return Err(pkg_name_refused(&request.name));
+        }
         let args = transaction_args("remove", &request.name);
         self.run_write(&self.inner.programs.apt_get, &args).await?;
         let version_applied = advisory_version(&self.inner, &request.name).await;
@@ -865,6 +944,7 @@ mod tests {
              fi\n\
              printf 'install ok installed\\tbash\\t5.2.15-2\\n'\n\
              printf 'install ok installed\\thtop\\t3.3.0-1\\n'\n\
+             printf 'hold ok installed\\tlinux-headers-amd64\\t6.1.0-27\\n'\n\
              printf 'deinstall ok config-files\\toldpkg\\t1.0-1\\n'\n",
         );
 
@@ -921,6 +1001,27 @@ End-Date: 2024-06-01  08:00:09
         let names: Vec<&str> = briefs.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(names, vec!["bash", "libfoo1"]);
         assert_eq!(briefs[0].version, "5.2.15-2");
+    }
+
+    #[test]
+    fn installed_table_keeps_held_packages() {
+        // dpkg's Status triple is `<want> <flag> <status>`: `apt-mark hold`
+        // (kernels, drivers) installs with want = `hold`, and dropping that
+        // row would make pkg_list hide exactly the packages a debugging agent
+        // needs to see first. The regression is pinned red/green here AND in
+        // the fixture table (list_reads_the_fixture_table).
+        let raw = b"hold ok installed\tlinux-headers-amd64\t6.1.0-27\n\
+                    hold ok installed\tlibfoo1:i386\t1.2.3-1\n\
+                    install ok config-files\tgone:amd64\t1.0-1\n\
+                    hold ok reinst-required\tbroken:amd64\t2.0-1\n";
+        let briefs = parse_installed_table(raw);
+        let names: Vec<&str> = briefs.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["linux-headers-amd64", "libfoo1"],
+            "hold + installed stays; non-installed statuses stay out"
+        );
+        assert_eq!(briefs[0].version, "6.1.0-27");
     }
 
     #[test]
@@ -1029,7 +1130,12 @@ End-Date: 2024-06-01  08:00:09
             .await
             .expect("list must read the fixture table");
         let names: Vec<&str> = all.iter().map(|b| b.name.as_str()).collect();
-        assert_eq!(names, vec!["bash", "htop"], "config-files rows stay out");
+        assert_eq!(
+            names,
+            vec!["bash", "htop", "linux-headers-amd64"],
+            "config-files rows stay out; a HELD package (hold ok installed) stays in — \
+             pkg_list must agree with pkg_info about the installed set"
+        );
         let limited = adapter
             .list(PackageListRequest { limit: Some(1) })
             .await
@@ -1132,11 +1238,90 @@ End-Date: 2024-06-01  08:00:09
             .await;
         match denied {
             Err(ContractError::NativeFailure { code, payload }) => {
-                assert_eq!(code, 100, "the apt exit status is preserved");
+                // The NativeFailure code space stays the closed NF_* set: the
+                // raw apt exit status travels in the payload, never as the
+                // machine-readable code.
+                assert_eq!(code, NF_TRANSACTION, "the code space stays closed");
+                assert!(
+                    payload.contains("exit status 100"),
+                    "the raw status is preserved in the payload: {payload}"
+                );
                 assert!(payload.contains("Unable to locate package"));
             }
             other => panic!("expected an honest native failure, got {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn option_like_names_never_reach_the_native_argv() {
+        // Argument-injection pin (R5/R6): a crafted "package name" is refused
+        // with the honest NF_PKG_NOT_FOUND BEFORE any native work. The fixture
+        // would echo success for any non-poison target, so an `Ok` here would
+        // mean the string reached the apt-get argv — `-f` is the classic
+        // fix-broken repair transaction, `-o=…` downgrades verification, a
+        // path turns the install into a local-deb installer.
+        let dir = fixture_dir("injection");
+        let adapter = fixture_adapter(&dir).await;
+        for hostile in [
+            "-f",
+            "-y",
+            "-o=APT::Get::AllowUnauthenticated=true",
+            "/tmp/evil.deb",
+        ] {
+            let write = adapter
+                .install(PackageNameRequest {
+                    name: String::from(hostile),
+                })
+                .await;
+            match write {
+                Err(ContractError::NativeFailure { code, payload }) => {
+                    assert_eq!(code, NF_PKG_NOT_FOUND, "refused for {hostile}");
+                    assert!(payload.contains(hostile), "payload names the input");
+                }
+                other => panic!("expected the honest refusal for {hostile:?}, got {other:?}"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn read_paths_refuse_option_shaped_input() {
+        let dir = fixture_dir("injection-read");
+        let adapter = fixture_adapter(&dir).await;
+        // info: a leading-dash "name" would be parsed as an option set.
+        let info = adapter.info(String::from("--force-yes")).await;
+        match info {
+            Err(ContractError::NativeFailure { code, payload }) => {
+                assert_eq!(code, NF_PKG_NOT_FOUND);
+                assert!(payload.contains("--force-yes"));
+            }
+            other => panic!("expected the honest info refusal, got {other:?}"),
+        }
+        // search: terms are free text, but a leading dash is the option
+        // injection vector — refused before any apt-cache spawn.
+        let search = adapter
+            .search(PackageSearch {
+                query: String::from("-o=APT::Get::AllowUnauthenticated=true"),
+                limit: None,
+            })
+            .await;
+        match search {
+            Err(ContractError::NativeFailure { code, payload }) => {
+                assert_eq!(code, NF_PKG_NOT_FOUND);
+                assert!(payload.contains("-o="));
+            }
+            other => panic!("expected the honest search refusal, got {other:?}"),
+        }
+        // Free-text terms (no leading dash) still flow through unchanged.
+        let found = adapter
+            .search(PackageSearch {
+                query: String::from("fixture"),
+                limit: Some(5),
+            })
+            .await
+            .expect("a plain search term is not refused");
+        assert!(!found.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

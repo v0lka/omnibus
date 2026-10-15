@@ -141,11 +141,17 @@ async fn declined_opt_in_leaves_the_status_quo_without_nagging() {
     );
 }
 
-/// Every doctor mutation is one audit event (doctor.md invariant): applying the
-/// storage command through the CLI path records the event through the SAME
-/// pipeline the daemon uses — tool `doctor`, op `doctor-apply:<name>`, the
-/// provenance in `scope_ref` — landing in the fallback sink of a
-/// volatile-journald machine (no journald primary on such a shape).
+/// The fallback sink renders the doctor event shape (doctor.md invariant, the
+/// pipeline half): the event recorded here goes through the SAME
+/// record→fallback pipeline the daemon's delivery helper uses — tool `doctor`,
+/// op `doctor-apply:<name>`, provenance `doctor:<name>` in `scope_ref` — and
+/// lands in the fallback sink of a volatile-journald machine (no journald
+/// primary on such a shape). This test does NOT execute the doctor CLI's apply
+/// path: the producer side — that `omnibusd doctor --apply` emits exactly this
+/// op/params/result/scope_ref shape — is pinned at the emitting code in
+/// `omnibusd/src/doctor_cli.rs`
+/// (`doctor_audit_event_pins_the_producer_shape`), so a producer regression
+/// cannot hide behind this test.
 #[tokio::test]
 async fn applied_storage_mutation_is_one_audit_event() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -157,8 +163,9 @@ async fn applied_storage_mutation_is_one_audit_event() {
         .find(|c| c.name == "enable journal persistence")
         .expect("the storage lever is a ready command");
 
-    // The doctor CLI's post-apply audit (omnibusd doctor --apply): same
-    // pipeline, same event shape (`audit_doctor_event` in omnibusd).
+    // Recorded through the same record→fallback pipeline the CLI delivery
+    // goes through; the CLI's own emission and its event shape are pinned at
+    // the producer (omnibusd/src/doctor_cli.rs, doctor_audit_event).
     let audited = core
         .audit
         .record(

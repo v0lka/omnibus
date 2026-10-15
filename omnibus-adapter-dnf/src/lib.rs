@@ -53,8 +53,11 @@ use tokio::io::AsyncReadExt;
 pub const NF_DNF: i32 = 1;
 /// `NativeFailure` code: the named package is neither installed nor available.
 pub const NF_PKG_NOT_FOUND: i32 = 2;
-/// `NativeFailure` code: a transaction failed (the dnf exit status is
-/// preserved; stderr text travels in the payload).
+/// `NativeFailure` code: a native invocation failed (the code space stays the
+/// closed, documented NF_* set — the raw dnf/rpm exit status is preserved in
+/// the payload text, `... failed with exit status 100: <stderr>`, never as the
+/// machine-readable code a client would have to know dnf's exit codes to
+/// read).
 pub const NF_TRANSACTION: i32 = 3;
 /// `NativeFailure` code: the history database cannot be read.
 pub const NF_HISTORY: i32 = 4;
@@ -103,16 +106,25 @@ const DEFAULT_BUDGET: Duration = Duration::from_secs(9);
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 /// Diagnostics cap for the concurrently drained stderr pipe.
 const MAX_STDERR_BYTES: usize = 64 * 1024;
-/// Upper bound on transactions inspected per `history`/`undo` call: the most
-/// recent window of the history database. Each transaction costs one bounded
-/// `history info` call, so the scan is capped at this documented constant;
-/// transactions older than the window are invisible to history and undo.
-const HISTORY_SCAN_LIMIT: usize = 32;
+/// Upper bound on transactions inspected per `history` call: the most recent
+/// window of the history database. Each transaction costs one SEQUENTIAL
+/// bounded `history info` spawn, and every real dnf invocation spends ~1–2 s
+/// of interpreter startup before any work; `pkg_history` is a READ, so the
+/// core wraps the whole call in `tokio::time::timeout(TOOL_CALL_BUDGET)` (10 s,
+/// `omnibus-core/src/limits.rs`). The window is sized for that envelope:
+/// worst case (1 + N) × ~1.5 s stays inside it. Transactions older than the
+/// window are invisible to history — the truncation is documented in the
+/// adapter report notes (the alpm/apt family answers from the same bounded
+/// recent-window class; `undo` scans [`UNDO_SCAN_LIMIT`]).
+const HISTORY_SCAN_LIMIT: usize = 4;
 /// Upper bound on transactions inspected per `undo` call while locating the
-/// one that altered the package (the same recent-window honesty class as
+/// one that altered the package (the same budget class as
 /// [`HISTORY_SCAN_LIMIT`], kept separate because the two windows answer
-/// different questions).
-const UNDO_SCAN_LIMIT: usize = 16;
+/// different questions: `undo` is a WRITE and the core budget does not wrap
+/// it, but the same per-spawn startup cost compounds into one call — and the
+/// same recent-window honesty applies to the
+/// [`NF_UNDO_NO_TRANSACTION`](NF_UNDO_NO_TRANSACTION) refusal).
+const UNDO_SCAN_LIMIT: usize = 4;
 
 /// The toolchain programs this adapter invokes.
 #[derive(Debug, Clone)]
@@ -327,14 +339,23 @@ async fn capture_bounded(
             });
         }
         if !status.success() {
+            // Every nonzero exit maps to the declared NF_TRANSACTION code: the
+            // NativeFailure code space is the closed NF_* set (the error
+            // taxonomy treats adapter codes as a documented set), so raw dnf/
+            // rpm exit codes never leak into it. The raw status still travels
+            // — in the payload text, alongside the stderr diagnostics.
             let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+            let reason = match status.code() {
+                Some(code) => format!("exit status {code}"),
+                None => String::from("a signal"),
+            };
             let payload = if stderr.is_empty() {
-                format!("{program} {args:?} exited with {status:?}")
+                format!("{program} {args:?} failed with {reason}")
             } else {
-                stderr
+                format!("{program} failed with {reason}: {stderr}")
             };
             return Err(ContractError::NativeFailure {
-                code: status.code().unwrap_or(NF_DNF),
+                code: NF_TRANSACTION,
                 payload,
             });
         }
@@ -603,6 +624,46 @@ fn keep_most_recent(entries: &mut Vec<PackageHistoryEntry>, limit: Option<u32>) 
     }
 }
 
+/// The rpm package-name grammar (rpmts/po regex the distro enforces):
+/// alphanumeric first character, then alphanumerics plus `. _ + -`. Anything
+/// else never reaches the native argv: dnf/rpm parse leading-dash elements as
+/// option sets (`--enablerepo=…`, `--setopt=…`), so an unvalidated "package
+/// name" would silently change what the native command does beyond the
+/// audited semantics of the call.
+fn is_rpm_pkg_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
+}
+
+/// The honest refusal for a name outside the grammar: the same
+/// [`NF_PKG_NOT_FOUND`] contract the unknown-package path answers (a name the
+/// grammar rejects can never name a package), raised BEFORE any native work.
+fn pkg_name_refused(name: &str) -> ContractError {
+    ContractError::NativeFailure {
+        code: NF_PKG_NOT_FOUND,
+        payload: format!(
+            "pkg-not-found: {name:?} is not a valid package name (expected the rpm name grammar: \
+             alphanumerics plus . _ + -)"
+        ),
+    }
+}
+
+/// Closes the one injection vector a search term has: a LEADING DASH makes
+/// dnf parse the term as an option set instead of a query. Search terms are
+/// otherwise free text on this contract (the alpm family matches
+/// descriptions too), so the full package-name grammar does not apply here —
+/// the option shape does. The refusal answers before any native work.
+fn search_term_refused(query: &str) -> ContractError {
+    ContractError::NativeFailure {
+        code: NF_PKG_NOT_FOUND,
+        payload: format!(
+            "pkg-not-found: {query:?} is parsed as an option, not a search term (terms must not \
+             start with '-')"
+        ),
+    }
+}
+
 #[async_trait]
 impl PackageManager for DnfAdapter {
     fn report(&self) -> AdapterReport {
@@ -638,9 +699,18 @@ impl PackageManager for DnfAdapter {
                     remedy: None,
                 },
             ],
-            notes: vec![String::from(
-                "history from the dnf history database; install/remove via dnf/dnf5, never interactive",
-            )],
+            notes: vec![
+                String::from(
+                    "history from the dnf history database; install/remove via dnf/dnf5, never interactive",
+                ),
+                // The honest truncation (R7): history is a read inside the
+                // core's 10 s budget, and every dnf spawn costs ~1–2 s of
+                // startup, so the scan window is bounded (see
+                // HISTORY_SCAN_LIMIT) — entries beyond it are invisible.
+                format!(
+                    "history scans at most the {HISTORY_SCAN_LIMIT} most recent transactions per call (read-budget window); older entries are invisible"
+                ),
+            ],
         }
     }
 
@@ -659,6 +729,9 @@ impl PackageManager for DnfAdapter {
     }
 
     async fn info(&self, name: String) -> Result<PackageInfo, ContractError> {
+        if !is_rpm_pkg_name(&name) {
+            return Err(pkg_name_refused(&name));
+        }
         let installed = rpm_query_version(&self.inner, &name).await;
         let available = match self
             .run(&self.inner.backend, &[String::from("info"), name.clone()])
@@ -726,6 +799,9 @@ impl PackageManager for DnfAdapter {
     }
 
     async fn search(&self, query: PackageSearch) -> Result<Vec<PackageBrief>, ContractError> {
+        if query.query.trim_start().starts_with('-') {
+            return Err(search_term_refused(&query.query));
+        }
         let args = [String::from("search"), query.query];
         let captured = self.run(&self.inner.backend, &args).await?;
         Ok(parse_search_lines(&captured.stdout, query.limit))
@@ -735,6 +811,9 @@ impl PackageManager for DnfAdapter {
         &self,
         request: PackageNameRequest,
     ) -> Result<TransactionResult, ContractError> {
+        if !is_rpm_pkg_name(&request.name) {
+            return Err(pkg_name_refused(&request.name));
+        }
         let args = [
             String::from("install"),
             String::from(ASSUME_YES),
@@ -752,6 +831,9 @@ impl PackageManager for DnfAdapter {
         &self,
         request: PackageNameRequest,
     ) -> Result<TransactionResult, ContractError> {
+        if !is_rpm_pkg_name(&request.name) {
+            return Err(pkg_name_refused(&request.name));
+        }
         let args = [
             String::from("remove"),
             String::from(ASSUME_YES),
@@ -774,17 +856,27 @@ impl PackageManager for DnfAdapter {
         let ids = history::parse_history_table(&captured.stdout);
         let window = ids.len().min(HISTORY_SCAN_LIMIT);
         let needed = usize::try_from(query.limit.unwrap_or(u32::MAX)).unwrap_or(usize::MAX);
-        let mut entries: Vec<PackageHistoryEntry> = Vec::new();
-        // Oldest → newest inside the recent window: ids arrive
-        // most-recent-first, the contract history is chronological.
-        for tid in ids[..window].iter().rev() {
+        // One chunk per transaction, in the order the events appear inside it
+        // (chronological within the transaction).
+        let mut chunks: Vec<Vec<PackageHistoryEntry>> = Vec::new();
+        let mut matched = 0usize;
+        // Newest → oldest across the recent window: ids arrive
+        // most-recent-first, and a bounded limit promises the MOST RECENT
+        // matching entries — so the scan starts at the newest transaction and
+        // stops as soon as the newest transactions have filled `needed`.
+        // Scanning oldest-first would stop inside the old end of the window
+        // whenever the window holds more events than the limit, silently
+        // dropping the newest transactions (the answers would be well within
+        // budget yet wrong).
+        for tid in ids[..window].iter() {
             let Some(info) = transaction_info(self, *tid).await? else {
                 continue; // a purged transaction stays invisible
             };
             let ts = info.begin_epoch_ms.unwrap_or_default();
+            let mut chunk: Vec<PackageHistoryEntry> = Vec::new();
             for (action, name, from, to) in &info.events {
                 if query.name.as_deref().is_none_or(|filter| filter == name) {
-                    entries.push(PackageHistoryEntry {
+                    chunk.push(PackageHistoryEntry {
                         ts_epoch_ms: ts,
                         action: *action,
                         name: name.clone(),
@@ -793,9 +885,20 @@ impl PackageManager for DnfAdapter {
                     });
                 }
             }
-            if entries.len() >= needed {
+            matched += chunk.len();
+            chunks.push(chunk);
+            if matched >= needed {
                 break;
             }
+        }
+        // The contract history is chronological: the newest-first scan
+        // accumulated the transaction chunks backwards, so flatten them
+        // newest-chunk-LAST — reversing a flat list would also reverse the
+        // event order INSIDE each transaction. This runs before the
+        // most-recent trim (which drops the OLDEST entries).
+        let mut entries: Vec<PackageHistoryEntry> = Vec::new();
+        for chunk in chunks.into_iter().rev() {
+            entries.extend(chunk);
         }
         keep_most_recent(&mut entries, query.limit);
         Ok(entries)
@@ -807,6 +910,12 @@ impl PackageManager for DnfAdapter {
     /// refusal for an untouched package happens BEFORE any native write.
     async fn undo(&self, request: PackageNameRequest) -> Result<UndoResult, ContractError> {
         let name = request.name;
+        // The name feeds the `rpm -q` lookup below (and every comparison
+        // against parsed history): the grammar gate comes first, before any
+        // native work.
+        if !is_rpm_pkg_name(&name) {
+            return Err(pkg_name_refused(&name));
+        }
         let ids_args = [String::from("history")];
         let captured = self.run(&self.inner.backend, &ids_args).await?;
         let ids = history::parse_history_table(&captured.stdout);
@@ -960,7 +1069,7 @@ if [ "$cmd" = "history" ]; then
         echo "Return-Code      : Success"
         echo "Packages Altered:"
         echo "    Install  foo-1.0.0-1.fc40.x86_64"
-        echo "    Upgrade  bar-2.0.0-1.fc40.x86_64"
+        echo "    Upgrade  oldlib-2.0.0-1.fc40.x86_64"
         ;;
       *)
         echo "Error: no transaction id $tid" >&2
@@ -1339,11 +1448,102 @@ exit 97
             .await;
         match denied {
             Err(ContractError::NativeFailure { code, payload }) => {
-                assert_eq!(code, 100, "the dnf exit status is preserved");
+                // The NativeFailure code space stays the closed NF_* set: the
+                // raw dnf exit status travels in the payload, never as the
+                // machine-readable code.
+                assert_eq!(code, NF_TRANSACTION, "the code space stays closed");
+                assert!(
+                    payload.contains("exit status 100"),
+                    "the raw status is preserved in the payload: {payload}"
+                );
                 assert!(payload.contains("Unable to find a match"));
             }
             other => panic!("expected an honest native failure, got {other:?}"),
         }
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn option_like_names_never_reach_the_native_argv() {
+        // Argument-injection pin: a crafted "package name" is refused with the
+        // honest NF_PKG_NOT_FOUND BEFORE any native work. The fixture would
+        // echo success for any non-poison target, so an `Ok` here would mean
+        // the string reached the dnf/rpm argv — the refusals prove the gate
+        // sits in front of every spawn (transaction, rpm lookup, undo).
+        let (adapter, dir) = fixture_adapter("injection").await;
+        for hostile in [
+            "-f",
+            "-y",
+            "--setopt=dnf.main.excludepkgs=kernel-core",
+            "/tmp/evil.rpm",
+        ] {
+            let write = adapter
+                .install(PackageNameRequest {
+                    name: String::from(hostile),
+                })
+                .await;
+            match write {
+                Err(ContractError::NativeFailure { code, payload }) => {
+                    assert_eq!(code, NF_PKG_NOT_FOUND, "refused for {hostile}");
+                    assert!(payload.contains(hostile), "payload names the input");
+                }
+                other => panic!("expected the honest refusal for {hostile:?}, got {other:?}"),
+            }
+            let undo = adapter
+                .undo(PackageNameRequest {
+                    name: String::from(hostile),
+                })
+                .await;
+            assert!(
+                matches!(
+                    undo,
+                    Err(ContractError::NativeFailure {
+                        code: NF_PKG_NOT_FOUND,
+                        ..
+                    })
+                ),
+                "undo refuses the hostile name too: {undo:?}"
+            );
+        }
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn read_paths_refuse_option_shaped_input() {
+        let (adapter, dir) = fixture_adapter("injection-read").await;
+        // info: a leading-dash "name" would be parsed as an option set.
+        let info = adapter.info(String::from("--enablerepo=updates")).await;
+        match info {
+            Err(ContractError::NativeFailure { code, payload }) => {
+                assert_eq!(code, NF_PKG_NOT_FOUND);
+                assert!(payload.contains("--enablerepo=updates"));
+            }
+            other => panic!("expected the honest info refusal, got {other:?}"),
+        }
+        // search: terms are free text, but a leading dash is the option
+        // injection vector — refused before any dnf spawn.
+        let search = adapter
+            .search(PackageSearch {
+                query: String::from("--setopt=dnf.main.excludepkgs=kernel-core"),
+                limit: None,
+            })
+            .await;
+        match search {
+            Err(ContractError::NativeFailure { code, payload }) => {
+                assert_eq!(code, NF_PKG_NOT_FOUND);
+                assert!(payload.contains("--setopt"));
+            }
+            other => panic!("expected the honest search refusal, got {other:?}"),
+        }
+        // Free-text terms (no leading dash) still flow through unchanged.
+        let found = adapter
+            .search(PackageSearch {
+                query: String::from("suite"),
+                limit: Some(5),
+            })
+            .await
+            .expect("a plain search term is not refused");
+        assert!(!found.is_empty());
         cleanup(&dir);
     }
 
@@ -1388,6 +1588,12 @@ exit 97
             all[0].name, "foo",
             "entries are chronological: the oldest transaction first"
         );
+        // The events INSIDE a transaction keep their native order too (a flat
+        // newest-first accumulation reversed wholesale would swap them).
+        assert_eq!(
+            all[1].name, "oldlib",
+            "tx21's second event follows its first"
+        );
         assert_eq!(all[0].action, PackageAction::Install);
         // 2024-05-01 09:00:00 UTC == 1714554000.
         assert_eq!(all[0].ts_epoch_ms, 1_714_554_000_000);
@@ -1404,11 +1610,35 @@ exit 97
             .await
             .expect("limited history");
         assert_eq!(recent.len(), 2);
+        // Non-vacuous pin of the newest-first scan: tx23 (install bar) is the
+        // NEWEST transaction and tx22 (erase gone) the second-newest, so the
+        // kept tail must be tx23's event — the oldest transaction (tx21:
+        // foo + oldlib) differs from the newest one's events, and an
+        // oldest-first scan that stops at `needed` would keep tx21's rows
+        // instead and fail this assertion.
         assert_eq!(
             recent[recent.len() - 1].name,
             "bar",
             "the kept tail is the MOST RECENT transaction"
         );
+        // 2024-06-01 08:00:02 UTC == 1717228802: the tail entry really is
+        // tx23's event, not tx21's same-named row (tx21 no longer has one).
+        assert_eq!(recent[recent.len() - 1].ts_epoch_ms, 1_717_228_802_000);
+        assert_eq!(recent[0].name, "gone", "the second-newest transaction");
+        // A limit smaller than one transaction's event count: the newest
+        // transaction alone fills `needed` (its single event), so the answer
+        // is exactly tx23's event — an oldest-first scan would have answered
+        // with tx21's rows (two events there).
+        let single = adapter
+            .history(PackageHistoryQuery {
+                name: None,
+                limit: Some(1),
+            })
+            .await
+            .expect("single-entry history");
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].name, "bar");
+        assert_eq!(single[0].ts_epoch_ms, 1_717_228_802_000);
         let filtered = adapter
             .history(PackageHistoryQuery {
                 name: Some(String::from("gone")),

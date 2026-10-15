@@ -123,7 +123,14 @@ impl KbGuidesAdapter {
 #[async_trait]
 impl KnowledgeBase for KbGuidesAdapter {
     /// The adapter report: identity, the KB_PRESENT fact, and the configured
-    /// sources (guides root and cache location).
+    /// sources (guides root and cache location). The fact is honest per the
+    /// R3 ladder: with a configured docs mirror the capability is `present`;
+    /// without one every `wiki_search`/`wiki_page` call answers
+    /// `AdapterUnavailable` (no reachable source, an empty cache on a fresh
+    /// install), so the fact is `degraded` (ladder rung 1 — the tools stay
+    /// wired, the limitation is visible) and carries the limitation plus the
+    /// exact remedy IN the fact — the capabilities document surfaces the fact
+    /// fields; report-level notes never reach it.
     fn report(&self) -> AdapterReport {
         let source_list = sources::REGISTRY
             .iter()
@@ -131,10 +138,33 @@ impl KnowledgeBase for KbGuidesAdapter {
             .collect::<Vec<_>>()
             .join(", ");
         let mut notes = vec![format!("registered distro doc sources: {source_list}")];
-        match &self.guides_dir {
-            Some(dir) => notes.push(format!("distro docs root at {}", dir.display())),
-            None => notes.push(String::from("no distro docs root configured")),
-        }
+        let (status, note, remedy) = match &self.guides_dir {
+            Some(dir) => {
+                notes.push(format!("distro docs root at {}", dir.display()));
+                (
+                    "present",
+                    Some(String::from(
+                        "Debian wiki, Ubuntu docs, Mint docs and Fedora docs",
+                    )),
+                    None,
+                )
+            }
+            None => {
+                notes.push(String::from("no distro docs root configured"));
+                (
+                    "degraded",
+                    Some(String::from(
+                        "no distro docs mirror configured: wiki_search/wiki_page answer \
+                         AdapterUnavailable until a mirror exists",
+                    )),
+                    Some(format!(
+                        "create the mirror root /usr/share/omnibus/kb-guides (or \
+                         ~/.local/share/omnibus/kb-guides) with one .md article directory per \
+                         registered source ({source_list})"
+                    )),
+                )
+            }
+        };
         notes.push(format!("article cache at {}", self.cache_dir.display()));
         AdapterReport {
             adapter: String::from("kb-guides"),
@@ -143,12 +173,10 @@ impl KnowledgeBase for KbGuidesAdapter {
             capabilities: vec![CapabilityFact {
                 name: String::from(KB_PRESENT),
                 ver: String::from(CONTRACT_VERSION),
-                status: String::from("present"),
+                status: String::from(status),
                 value: None,
-                note: Some(String::from(
-                    "Debian wiki, Ubuntu docs, Mint docs and Fedora docs",
-                )),
-                remedy: None,
+                note,
+                remedy,
             }],
             notes,
         }
@@ -536,6 +564,44 @@ mod tests {
         );
         assert!(report.notes.iter().any(|n| n.contains("cache")));
         drop((guides, cache));
+    }
+
+    #[test]
+    fn report_degrades_honestly_without_a_docs_mirror() {
+        // R3 rung 1: with no configured mirror every wiki call answers
+        // AdapterUnavailable (no reachable source, an empty cache on a fresh
+        // install), so the fact must not advertise `present` — the degraded
+        // status plus the limitation and the exact remedy travel IN the fact,
+        // because the capabilities document surfaces the fact fields while
+        // report-level notes never reach it.
+        let cache = testutil::temp_dir("report-degraded");
+        let adapter = KbGuidesAdapter::new(cache.path().to_path_buf(), None);
+        let report = adapter.report();
+        assert_eq!(report.capabilities.len(), 1);
+        let fact = &report.capabilities[0];
+        assert_eq!(fact.name, KB_PRESENT);
+        assert_eq!(fact.status, "degraded", "no mirror is never `present`");
+        assert!(
+            fact.note
+                .as_deref()
+                .is_some_and(|n| n.contains("AdapterUnavailable")),
+            "the note names the honest tool behavior: {:?}",
+            fact.note
+        );
+        let remedy = fact.remedy.as_deref().unwrap_or_default();
+        assert!(
+            remedy.contains("/usr/share/omnibus/kb-guides") && remedy.contains("debian-wiki"),
+            "the remedy names exactly what to create, per source: {remedy}"
+        );
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("no distro docs root")),
+            "the report note stays too: {:?}",
+            report.notes
+        );
+        drop(cache);
     }
 
     #[test]

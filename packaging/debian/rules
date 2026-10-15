@@ -9,11 +9,27 @@
 
 # debhelper with the default sequence; the overrides below replace the
 # auto-detected build/install steps with the cargo conventions of this repo.
+#
+# The build is OFFLINE by contract: the source package ships the vendored
+# crates.io dependencies (cut by packaging/ppa/upload.sh — `cargo vendor` +
+# the .cargo/config.toml source replacement), because Launchpad builders are
+# network-isolated. A builder missing vendor/ fails loudly here instead of
+# reaching for the network.
+#
+# The build is CROSS-FAMILY by contract, byte-identical to the T2 CI legs
+# (.github/workflows/t2.yml): --no-default-features drops omnibusd's
+# family-alpm wiring and --exclude keeps the omnibus-adapter-alpm member out
+# of the build entirely — the alpm adapter links the SYSTEM libalpm via
+# pkg-config (alpm-sys has no vendored fallback), which does not exist on
+# Debian builders by design (this family's backend is apt; the probe + R3
+# ladder hide the absent alpm row). gcc stays in Build-Depends for ring
+# (ureq -> rustls in kb-archwiki); with alpm excluded no pkg-config is
+# needed.
 %:
 	dh $@
 
 override_dh_auto_build:
-	cargo build --release
+	cargo build --workspace --no-default-features --exclude omnibus-adapter-alpm --release --offline
 
 # The contract suite and smoke demos are CI-matrix work, not package-build
 # work: they need a session-capable environment and live in ci/matrix/

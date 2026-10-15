@@ -311,24 +311,47 @@ async fn drain_capped<R: tokio::io::AsyncRead + Unpin>(pipe: Option<R>) -> Vec<u
     buf
 }
 
+/// One applied doctor command's audit event, assembled at the producer: the
+/// single source for BOTH the delivery call and its shape pin (the unit test
+/// below) — the tool, the op (`doctor-apply:<name>`), the params, the result
+/// and the `doctor:<name>` provenance are defined here, never hand-copied
+/// into tests.
+struct DoctorAuditEvent {
+    tool: &'static str,
+    op: String,
+    arguments: serde_json::Value,
+    result: String,
+    scope_ref: Option<String>,
+}
+
+fn doctor_audit_event(op: &str, ok: bool, detail: &str) -> DoctorAuditEvent {
+    DoctorAuditEvent {
+        tool: "doctor",
+        op: format!("doctor-apply:{op}"),
+        arguments: serde_json::json!({ "op": op }),
+        result: if ok {
+            String::from("ok")
+        } else {
+            format!("fail:{detail}")
+        },
+        scope_ref: Some(format!("doctor:{op}")),
+    }
+}
+
 /// The doctor mutation is audited through the same pipeline the daemon uses
 /// (journald primary, file fallback), with provenance `doctor` in `scope_ref`.
 /// A delivery failure on both sinks is surfaced loudly (audit totality) without
 /// changing the command's outcome.
 async fn audit_doctor_event(op: &str, ok: bool, detail: &str) {
-    let result = if ok {
-        String::from("ok")
-    } else {
-        format!("fail:{detail}")
-    };
+    let event = doctor_audit_event(op, ok, detail);
     let delivered = super::wiring::audit_cli_event(
         "cli",
         "omnibus-doctor-cli",
-        "doctor",
-        &format!("doctor-apply:{op}"),
-        &serde_json::json!({ "op": op }),
-        &result,
-        Some(format!("doctor:{op}")),
+        event.tool,
+        &event.op,
+        &event.arguments,
+        &event.result,
+        event.scope_ref,
     )
     .await;
     if !delivered {
@@ -376,6 +399,39 @@ mod tests {
         let capped = cap_text(&long, AUDIT_DETAIL_CAP_CHARS);
         assert_eq!(capped.chars().count(), AUDIT_DETAIL_CAP_CHARS + 1);
         assert!(capped.ends_with('…'));
+    }
+
+    /// The producer's audit shape, pinned at the only code that emits the
+    /// event (`apply` → `audit_doctor_event` → this builder): tool `doctor`,
+    /// op `doctor-apply:<name>`, the op in the params, and the provenance in
+    /// `scope_ref` as `doctor:<name>`. The core-side fallback-sink test
+    /// (`omnibus-core/tests/doctor_optin.rs`) proves the pipeline renders the
+    /// shape; THIS pin proves the CLI produces it — the acceptance AC lives
+    /// or dies with both halves, and neither hand-copies the other's strings
+    /// without the producer being checked.
+    #[test]
+    fn doctor_audit_event_pins_the_producer_shape() {
+        let event = doctor_audit_event("enable journal persistence", true, "");
+        assert_eq!(event.tool, "doctor");
+        assert_eq!(event.op, "doctor-apply:enable journal persistence");
+        assert_eq!(
+            event.arguments,
+            serde_json::json!({ "op": "enable journal persistence" })
+        );
+        assert_eq!(event.result, "ok");
+        assert_eq!(
+            event.scope_ref.as_deref(),
+            Some("doctor:enable journal persistence")
+        );
+
+        // A failed apply carries the failure detail in the result, provenance
+        // unchanged.
+        let failed = doctor_audit_event("enable journal persistence", false, "exit 1: nope");
+        assert_eq!(failed.result, "fail:exit 1: nope");
+        assert_eq!(
+            failed.scope_ref.as_deref(),
+            Some("doctor:enable journal persistence")
+        );
     }
 
     /// The honest "killed" claim: the timeout must end the command's WHOLE

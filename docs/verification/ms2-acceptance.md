@@ -11,7 +11,9 @@ external runs carry a `REQ-EXT` marker instead and are collected in the
 register at the end. The Manjaro legs re-confirm the checks first recorded
 in [ms1-ms2-manjaro-acceptance.md](ms1-ms2-manjaro-acceptance.md).
 
-Verification date: 2026-10-14. Reference machine: Manjaro Linux rolling
+Verification date: 2026-10-14; the full-workspace suite (E6) and the packaging
+validator (E7) were re-run green on 2026-10-15 after the review fixes.
+Reference machine: Manjaro Linux rolling
 (kernel 7.1.13-2-MANJARO, GNOME/Wayland, systemd 261, at-spi2-core
 2.60.6-1, NetworkManager 1.58.1 active, journald persistent).
 
@@ -24,8 +26,8 @@ Verification date: 2026-10-14. Reference machine: Manjaro Linux rolling
 | E3 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | finished, zero warnings |
 | E4 | R4 boundary lints | `cargo run -p omnibus-lints --bin omnibus-lints` | "OK (R4-COP, R4-NATIVE, R4-CON, R4-EDGES green)" |
 | E5 | R4 red/green fixtures | `cargo test -p omnibus-lints --test fixtures` | 10 passed, 0 failed |
-| E6 | Full workspace tests | `cargo test --workspace` | 455 passed across 47 suites, 0 failed suites |
-| E7 | Packaging + matrix validator | `make packaging` (`python3 ci/validate_packaging.py`) | "all green: 129 checks passed", exit 0 (re-run after deleting the demo-generated `ci/smoke/__pycache__/` that the hygiene scan correctly flags) |
+| E6 | Full workspace tests | `cargo test --workspace` | 462 passed across 47 suites, 0 failed suites |
+| E7 | Packaging + matrix validator | `make packaging` (`python3 ci/validate_packaging.py`) | "all green: 150 checks passed", exit 0 |
 | E8 | Pitch demos as autotests | `ci/smoke/run-demos.sh` | demo1/demo2/demo3 OK — "all demos passed (skips are honest and allowed)" (a first run hit a transient cold-connect stall: the adapter honestly answered `TimeoutError` inside its 5 s request budget while the same query answered in 0.4 s once warm — the demo skip-list covers `AdapterUnavailable`/`NativeFailure`, not the stalled-network timeout) |
 | E9 | Live doctor | `./target/debug/omnibusd doctor` | banner "Manjaro Linux rolling (7.1.13-2-MANJARO / GNOME)"; `[ok] floor: systemd 261: floor 252.0 met`; `[ok] floor: at-spi2 2.60.6-1: floor 2.50 met`; `[ok] journal: journald persistent storage: true`; "no pending human actions" |
 | E10 | Live daemon capabilities | `python3 ci/smoke/mcp_client.py ./target/debug/omnibusd list` + `call capabilities` | 17 read-only tools incl. `net_status`, `wiki_search`, `wiki_page`; document carries `distro {id: manjaro, family: manjaro, release: rolling}`, `floors: []` (all floors met), `journal.persistent present value=true`, `journal.prev_boot present value=true`, `net.read` via the nm adapter ("NetworkManager 1.58.1 … read-only"), `pkg.undo` via alpm (cache-downgrade); 17 capability entries |
@@ -77,7 +79,7 @@ tests are a subset of E6 re-run with filters for exact citation.
 
 ### Task 2.4.1 — Manjaro branch: T1 contract + own test matrix
 
-- [x] **AC** The full T1 autotest set green on Manjaro (GNOME/KDE × X11/Wayland) — PASS (this machine, GNOME/Wayland): E6 full workspace green (455/0), E8 demos green, E9/E10 live daemon with the full T1 read set and honest grant gating. The KDE/X11 legs are defined in `.github/workflows/manjaro.yml`'s dispatch-gated `manjaro-vm-matrix`; REQ-EXT on true VMs.
+- [x] **AC** The full T1 autotest set green on Manjaro (GNOME/KDE × X11/Wayland) — PASS (this machine, GNOME/Wayland): E6 full workspace green (462/0), E8 demos green, E9/E10 live daemon with the full T1 read set and honest grant gating. The KDE/X11 legs are defined in `.github/workflows/manjaro.yml`'s dispatch-gated `manjaro-vm-matrix`; REQ-EXT on true VMs.
 - [x] **AC** mhwd specifics (video drivers) do not break the desktop subsystem (smoke on a VM with a non-free driver) — PASS (local proxy): the desktop path is AT-SPI2 over D-Bus and mhwd-agnostic (the a11y suite walked the real compositor in the MS1 session; E6 re-greens it), while mhwd presence is a report fact only (E11 `manjaro_report_carries_full_t1_candidates_and_facts`, E9 banner `mhwd=true`). REQ-EXT: the non-free-driver VM leg.
 - [x] **AC** Delayed repos detected by the probe and reflected in the report (not silently) — PASS: the live probe banner prints `manjaro(delayed_repos=true, mhwd=true, pamac=true)` (E10 stderr; E9 header), and the parsing is unit-tested (E11 pacman.conf/mirrorlist tests).
 
@@ -86,7 +88,7 @@ tests are a subset of E6 re-run with filters for exact citation.
 ### Task 2.5.1 — doctor: journald-persistence opt-in
 
 - [x] **AC** Ubuntu VM with deliberately volatile journald: before opt-in `journal.persistent` = `opt-in-required` and `prev_boot` hidden; after the grant and the manual storage creation the next instance sees persistent=true; after the reboot `prev_boot=true` with the past boot readable — PASS (local proxy, the automatable halves): `volatile_journal_doctor_reports_opt_in_with_both_human_levers` (E13 — the honest `warn` names the rung and the remedy names BOTH the grant and the storage command, which enters `ready_commands` as `enable journal persistence`, `executed_by: "human"`); `persistent_journal_doctor_reports_ok_without_commands` (E13 — a persistent machine reports ok with no storage command); the journald adapter re-detects the persistence fact at every instance start (the `/var/log/journal` marker-directory check and the fact-driven `journal.persistent`/`journal.prev_boot` entries with the volatile hint are unit-pinned in `omnibus-adapter-journald/src/journal.rs` — E6); prev_boot gating in E13 (`session_lifecycle`). REQ-EXT: the full VM walkthrough across a real reboot.
-- [x] **AC** Consent is separate, granular, collected outside the agent's loop; every change is an audit event — PASS: the grant lever is the existing generic opt-in finding (`omnibusd grant journal.persistent`), the storage mutation is a separate human-executed `omnibusd doctor --apply` action, and `applied_storage_mutation_is_one_audit_event` (E13) proves exactly one audit event through the shared pipeline with `scope_ref: doctor:<name>` provenance; over MCP doctor still only diagnoses (the never-list security tests stay green in E6).
+- [x] **AC** Consent is separate, granular, collected outside the agent's loop; every change is an audit event — PASS: the grant lever is the existing generic opt-in finding (`omnibusd grant journal.persistent`), the storage mutation is a separate human-executed `omnibusd doctor --apply` action, and the audit proof has two pinned halves: `applied_storage_mutation_is_one_audit_event` (E13) proves the fallback sink renders exactly one audit event through the shared record→fallback pipeline with `scope_ref: doctor:<name>` provenance, and `doctor_audit_event_pins_the_producer_shape` (`omnibusd/src/doctor_cli.rs`) pins the CLI producer's event shape (tool `doctor`, op `doctor-apply:<name>`, `scope_ref: doctor:<name>`) at the only code that emits it — the core test does not execute the CLI apply path, the producer pin covers exactly that; over MCP doctor still only diagnoses (the never-list security tests stay green in E6).
 - [x] **AC** Refusal leaves the read-only status quo without repeat nagging (frequency policy — test) — PASS: `declined_opt_in_leaves_the_status_quo_without_nagging` (E13) — the diagnosis is a stateless pure function of machine facts, so repeated diagnosis is idempotent and a declined opt-in changes nothing.
 
 ### Task 2.5.2 — adapter-kb-guides: distro docs
@@ -98,7 +100,7 @@ tests are a subset of E6 re-run with filters for exact citation.
 
 ### Task 2.6.1 — Packaging: PPA, Debian repo, COPR
 
-- [x] **AC** Install via the native package manager on every T2 platform → daemon works, TTFM < 5 min (onboarding autotest on VM) — REQ-EXT (VM installs; `ci/matrix/t2.yml` pins every `package-install` leg `req-ext`). Local: the packaging inputs exist and validate — E7 (129 checks: debian control/rules/install/changelog, fedora spec, ppa signing posture, upload.sh `bash -n`, full matrix schema, workflow wiring).
+- [x] **AC** Install via the native package manager on every T2 platform → daemon works, TTFM < 5 min (onboarding autotest on VM) — REQ-EXT (VM installs; `ci/matrix/t2.yml` pins every `package-install` leg `req-ext`). Local: the packaging inputs exist and validate — E7 (150 checks: debian control/rules/install/changelog, fedora spec, ppa signing posture, upload.sh `bash -n` + full-suffix validation + artifact-parent layout, offline/floor channel build contract, full matrix schema, workflow wiring).
 - [x] **AC** Repository signing verified by a fresh machine (without trusting the key the install honestly warns) — REQ-EXT (needs the published channels and keys). Local: E7 pins the signing posture (`allow_unsigned_uploads = 0`, `dpkg-buildpackage -S` cut via `packaging/ppa/upload.sh`; CI never uploads).
 - [x] **AC** MVP → v1.0 upgrade with no manual steps — REQ-EXT (needs the published v1.0 artifacts; cross-family migration is not promised).
 
@@ -131,10 +133,11 @@ tests are a subset of E6 re-run with filters for exact citation.
 
 All 33 MS2 roadmap acceptance criteria are recorded above with zero unticked
 checkboxes: every local claim cites a command executed in this repository on
-2026-10-14, and every genuinely external dependency (VM matrices, signed
+2026-10-14 (E6/E7 re-run green on 2026-10-15), and every genuinely external
+dependency (VM matrices, signed
 publication, the v1.0 tag, announcements) is an explicit REQ-EXT item with
 the procedure that closes it (`docs/release-checklist.md`). The gates are
 green this session: specs validator exit 0 (E1), fmt/clippy clean (E2/E3),
-R4 lints and fixtures green (E4/E5), the full workspace suite 455/0 (E6),
-packaging + matrix validation 129/129 (E7), demos green (E8), and the live
+R4 lints and fixtures green (E4/E5), the full workspace suite 462/0 (E6),
+packaging + matrix validation 150/150 (E7), demos green (E8), and the live
 Manjaro daemon serving the honest capabilities document (E9/E10).

@@ -114,16 +114,27 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Spec system validation
+        # Gated by the leg's declared scope (runs.specs in ci/matrix/t2.yml):
+        # a build-only T3 leg means exactly that — no spec validation (the
+        # bullseye distro Python 3.9 has no tomllib, and a build-only leg
+        # provisions no newer interpreter).
+        if: matrix.runs['specs']
         run: make specs
 
       - name: Build the workspace
-        run: cargo build --workspace
+        # Cross-family build contract: --no-default-features drops the
+        # family-alpm wiring (the alpm adapter links the SYSTEM libalpm via
+        # pkg-config — absent on this family by design; the family backend is
+        # apt/dnf), and --exclude keeps the workspace from compiling the
+        # omnibus-adapter-alpm member itself (its libalpm link cannot build
+        # here; the daemon is built without it either way).
+        run: cargo build --workspace --no-default-features --exclude omnibus-adapter-alpm
 
       - name: Contract suite (cargo test --workspace)
         if: matrix.runs['contract-suite']
         # R2: the same contract suite on every family, exactly as the
         # matrix's runs.contract-suite field promises.
-        run: cargo test --workspace
+        run: cargo test --workspace --no-default-features --exclude omnibus-adapter-alpm
 
       - name: Smoke demos (honest skips when a backend is absent)
         if: matrix.runs['smoke']
@@ -131,16 +142,15 @@ jobs:
 
   vm-legs:
     name: T2 VM legs (Mint VM + package-install, REQ-EXT)
-    # TODO(roadmap 2.6.1 / 2.6.2): this job stays SKIPPED until the true-VM
-    # legs exist:
+    # TODO(roadmap 2.6.1 / 2.6.2): the true-VM legs DO NOT EXIST yet, and this
+    # placeholder REFUSES to fake them:
     #
     #   1. Provision a Mint 22.x VM (X11-default session) and register it as
     #      a self-hosted runner labeled exactly: mint-x11.
     #   2. Provision one VM per T2 platform for the package-install legs and
     #      add the repo variable T2_VM_ENABLED=true (Settings -> Secrets and
     #      variables -> Actions -> Variables). While it is unset or false,
-    #      this job evaluates to false and is skipped — by design, so the
-    #      workflow never fakes a green install matrix.
+    #      this job evaluates to false and is skipped.
     #   3. The package-install legs run the roadmap 2.6.1 AC on real
     #      hardware: `apt install` / `dnf install` from the channel
     #      (packaging/debian + COPR), daemon starts, TTFM < 5 min, then the
@@ -148,6 +158,10 @@ jobs:
     #   4. Follow docs/release-checklist.md (roadmap 2.6.2) for the tier
     #      reporting: tier != capabilities divergences go into the release
     #      report, never get papered over here.
+    #
+    # Until the real steps land, an enabled T2_VM_ENABLED produces a RED job,
+    # never a green no-op: a green TODO echo would convert the honesty
+    # safeguard into exactly the fake install matrix it exists to prevent.
     if: github.event_name == 'workflow_dispatch' && vars.T2_VM_ENABLED == 'true'
     runs-on: ${{ matrix.runner-label }}
     strategy:
@@ -158,14 +172,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install from the channel + smoke against the real session
+      - name: Not implemented — fail loudly instead of faking the guarantee
         run: |
           set -euo pipefail
-          # TODO(roadmap 2.6.1): assert the native install + TTFM budget:
-          #   time apt install ./omnibus_*.deb   (or dnf)
-          #   timeout 300 bash -c 'omnibusd --version && <tools/list probe>'
-          #   ci/smoke/run-demos.sh
-          echo "TODO(2.6.1): native install + TTFM + smoke on the real VM"
+          echo "error: the real VM legs (native install + TTFM + smoke on a real Mint VM) are not implemented yet — roadmap 2.6.1 must land first" >&2
+          echo "error: T2_VM_ENABLED=true is set, but there is no install/smoke step to run; keep the variable unset/false until then" >&2
+          echo "error: this job fails on purpose: a green placeholder would report an install matrix that installed nothing" >&2
+          exit 1
 
   # The header promises every run prints which legs were real, which were
   # stand-ins and which were skipped; this job is that print (always runs,
@@ -190,4 +203,20 @@ jobs:
               print(f"  {leg[\"id\"]:16} {kind} — build+suite: {bool(leg[\"runs\"].get(\"contract-suite\"))}, smoke: {bool(leg[\"runs\"].get(\"smoke\"))}")
           '
           echo "  package-install:  REQ-EXT on every leg (never a CI claim; release-runbook work, roadmap 2.6.1)"
-          echo "  vm-legs:          ${{ github.event_name == 'workflow_dispatch' && vars.T2_VM_ENABLED == 'true' && 'real VM legs (dispatched, T2_VM_ENABLED=true)' || 'skipped (scheduled run or T2_VM_ENABLED unset/false) — package-install and Mint VM are REQ-EXT this run' }}"
+          # The vm-legs verdict comes from the JOB OUTCOME, not from the
+          # dispatch variable: a variable alone never announces an executed
+          # install matrix. Until the real legs exist, an enabled
+          # T2_VM_ENABLED fails the vm-legs job on purpose, so this line
+          # reports a failure, never a fake green.
+          VM_RESULT="${{ needs.vm-legs.result }}"
+          case "$VM_RESULT" in
+            success)
+              echo "  vm-legs:          real VM legs executed (dispatched, T2_VM_ENABLED=true, job green)"
+              ;;
+            failure)
+              echo "  vm-legs:          FAILED — the placeholder refuses to fake the install matrix (roadmap 2.6.1 not landed; see the vm-legs job log)"
+              ;;
+            *)
+              echo "  vm-legs:          ${VM_RESULT} (not executed) — package-install and Mint VM are REQ-EXT this run"
+              ;;
+          esac

@@ -8,6 +8,20 @@
 # %build run cargo against the workspace root, and %install picks the
 # artifacts from target/release/ exactly like the PKGBUILD does.
 #
+# The SRPM assembly step has TWO hard contracts (both checked at build time,
+# neither assumed):
+#   * Vendored dependencies: the SRPM tree must carry vendor/ plus the
+#     .cargo/config.toml source replacement (cut exactly like
+#     packaging/ppa/upload.sh does: `cargo vendor vendor >
+#     .cargo/config.toml`). COPR builders are network-isolated; %build runs
+#     cargo --offline, so a missing vendor/ fails loudly instead of reaching
+#     for the network.
+#   * Toolchain floor: edition 2024 = rustc >= 1.85. The chroot's rustc must
+#     meet the floor — cargo aborts on the first manifest otherwise. Current
+#     Fedora carries a current-enough rustc; the release checklist
+#     (docs/release-checklist.md) has the release owner re-verify the chroot
+#     before every channel cut instead of trusting this comment.
+#
 # Fedora deltas, packaged here (roadmap task 2.6.1; tiers per
 # specs/architecture/platform-matrix.md - Fedora desktop is T2):
 #   * dnf is transactional: pkg_undo works on this family (the one T2
@@ -65,7 +79,20 @@ through dnf's transactional undo (pkg_undo) on this family.
 :
 
 %build
-cargo build --release
+# Offline by contract: the SRPM tree carries the vendored dependencies (see
+# the header — the SRPM assembly step cuts them like upload.sh does). A
+# builder missing vendor/ fails here, loudly, instead of reaching for the
+# network.
+#
+# Cross-family by contract, byte-identical to debian/rules and the T2 CI legs
+# (.github/workflows/t2.yml): --no-default-features drops omnibusd's
+# family-alpm wiring and --exclude keeps the omnibus-adapter-alpm member out
+# of the build — the alpm adapter links the SYSTEM libalpm via pkg-config
+# (alpm-sys has no vendored fallback), absent in this chroot by design (this
+# family's backend is dnf; the probe + R3 ladder hide the absent alpm row).
+# gcc (BuildRequires above) covers ring's C compiler (ureq -> rustls in
+# kb-archwiki); with alpm excluded no pkg-config is needed.
+cargo build --workspace --no-default-features --exclude omnibus-adapter-alpm --release --offline
 
 %install
 install -Dm0755 target/release/omnibusd %{buildroot}%{_bindir}/omnibusd

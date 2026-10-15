@@ -167,6 +167,11 @@ async fn build_registry(
     {
         registry.services = Some(Arc::new(adapter));
     }
+    // Family-conditional (the `family-alpm` feature): the alpm adapter links
+    // the system libalpm, so builds without the feature (the cross-family T2
+    // legs, the deb/rpm channels) wire no alpm row — the honest product shape
+    // for a Debian/Fedora package, whose family backend is apt/dnf.
+    #[cfg(feature = "family-alpm")]
     if matches!(
         platform.distro.family,
         DistroFamily::Arch | DistroFamily::Manjaro

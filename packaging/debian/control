@@ -14,22 +14,41 @@
 #
 # The binary is built from the repository tree the source package is cut
 # from (see debian/rules): one static omnibusd binary, adapters are selected
-# at run time, so there are no per-distro binary packages. Rust is edition
-# 2024: the release toolchain is provisioned by the repository build
-# infrastructure, because distro rustc floors on bookworm (1.63) sit below
-# the edition-2024 floor; cargo:native / rustc:native stay declared as the
-# toolchain contract. License: no LICENSE file exists in the repository yet;
-# the License field is intentionally absent from the copyright sense until
-# upstream designates one (same decision as packaging/PKGBUILD).
+# at run time, so there are no per-distro binary packages.
+#
+# Toolchain contract (edition 2024 = rustc >= 1.85): the builder's rustc must
+# meet the floor, full stop — cargo aborts on the first workspace manifest
+# otherwise. This packaging input makes NO assumption of an out-of-tree
+# provisioning service: binary channel builds are cut only on builders whose
+# rustc meets the floor; on series whose rustc sits below it (bookworm: 1.63
+# per this very file's history, noble-era builders included), the channel
+# ships source-only or prebuilt binaries produced on a provisioned host
+# (docs/release-checklist.md, packaging/README.md). cargo:native /
+# rustc:native stay declared as the toolchain contract; there is no
+# vendored-toolchain escape hatch in this source package.
+#
+# Dependencies are vendored into the source package at cut time
+# (packaging/ppa/upload.sh: cargo vendor + .cargo/config.toml); debian/rules
+# builds --offline — Launchpad builders are network-isolated.
+#
+# License: no LICENSE file exists in the repository yet; the License field is
+# intentionally absent from the copyright sense until upstream designates one
+# (same decision as packaging/PKGBUILD).
 
 Source: omnibus
 Section: utils
 Priority: optional
 Maintainer: Omnibus maintainers <maintainers@omnibus.invalid>
+# Build toolchain: cargo/rustc carry the edition-2024 floor (see above);
+# gcc is the C compiler ring needs at build time (ureq -> rustls in
+# kb-archwiki). No pkg-config/libalpm here: the build excludes the alpm
+# adapter (debian/rules mirrors the T2 CI legs), and nothing else in the
+# graph probes the system via pkg-config.
 Build-Depends:
  debhelper-compat (= 13),
  cargo:native,
- rustc:native
+ rustc:native,
+ gcc:native
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
 
