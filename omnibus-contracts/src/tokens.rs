@@ -5,17 +5,22 @@
 //! `pub(crate)` trick cannot distinguish core from adapters):
 //!
 //! - The token types are opaque newtypes with no public constructor taking raw
-//!   values — by review discipline only: no R4 fixture (or any other compile-time
-//!   check) pins constructor absence, and both halves of the enforcement below
-//!   are runtime.
+//!   values — pinned by a negative compile test (the `compile_fail` doctest on
+//!   [`ElementId`]): a forged string cannot become a token value, it can only
+//!   arrive as a deserialized string on the MCP surface.
 //! - The derived `serde::Deserialize` accepts any string, so a foreign or stale
 //!   token is not a constructor escape either: it mints nothing — it simply fails
 //!   to resolve in the core, which answers with a typed `ElementStale`
-//!   (spi-registry.md).
+//!   (spi-registry.md). The negative `forged_token_is_rejected` test pins this
+//!   half through the dispatch path (omnibus-core/tests/session_lifecycle.rs).
 //! - Minting requires a [`MintKey`], a per-process secret the core generates at
 //!   startup from fresh entropy and never shares: adapters and tools never receive
 //!   one, so only the core can mint valid tokens — the runtime enforcement half.
-//!   Documents stay honest about what is and is not compile-time here.
+//!   The constructor surface is deliberately minimal: [`MintKey::try_from_entropy`]
+//!   is the ONLY constructor (the old unchecked escape hatch is removed), and the
+//!   composition root is its only legitimate caller. Rust cannot type-distinguish
+//!   the composition root from an adapter, so this half is runtime + review, and
+//!   the documents say so honestly.
 //!
 //! Tokens serialize as strings on the MCP surface but their internal structure is
 //! never part of any contract.
@@ -41,20 +46,12 @@ impl std::fmt::Debug for MintKey {
 }
 
 impl MintKey {
-    /// Builds the key from entropy the caller (the core) generated securely.
-    ///
-    /// Precondition: `bytes` is not all zeros. This constructor is infallible and
-    /// the seam is panic-free, so it cannot enforce the precondition itself:
-    /// callers that cannot guarantee it must use [`MintKey::try_from_entropy`].
-    /// All-zero input yields a predictable degenerate key — never install one
-    /// silently; the `_unchecked` suffix marks the transferred obligation at
-    /// every call site.
-    pub fn from_entropy_unchecked(bytes: [u8; 32]) -> Self {
-        Self { bytes }
-    }
-
     /// Checked constructor: rejects all-zero entropy with a contract error
-    /// instead of accepting a predictable degenerate key.
+    /// instead of accepting a predictable degenerate key. The ONLY constructor:
+    /// outside this crate there is no unchecked escape hatch, and the only
+    /// legitimate caller is the composition root (the `omnibusd` binary path
+    /// through the core) — adapters and tools never hold a key, so minting
+    /// stays core-only at runtime.
     pub fn try_from_entropy(bytes: [u8; 32]) -> Result<Self, ContractError> {
         if bytes == [0u8; 32] {
             return Err(ContractError::Unsupported {
@@ -100,7 +97,9 @@ macro_rules! opaque_token {
 
         impl $name {
             /// Mints a fresh token from the core's key plus a context string and a
-            /// monotonically increasing sequence number. Only the core calls this.
+            /// monotonically increasing sequence number. Core-only by possession:
+            /// the argument is a [`MintKey`], and only the composition root ever
+            /// holds one (see the crate-level enforcement model).
             pub fn mint(key: &MintKey, context: &str, seq: u64) -> Self {
                 Self(format!("{}-{:016x}", $prefix, mix(&key.bytes, context.as_bytes(), seq)))
             }
@@ -140,6 +139,18 @@ impl fmt::Debug for ElementId {
 opaque_token!(
     /// A11y element identity: minted by the core when a tree snapshot is delivered;
     /// resolving a foreign token is a typed `ElementStale` (spi-registry.md).
+    ///
+    /// Negative compile test (AC 1.2.2): a token value cannot be fabricated from
+    /// a raw string — the token types expose no public value constructor, so the
+    /// only way an `ElementId` exists is the core's mint path. Deserialization
+    /// from the MCP surface is deliberately exempt (it yields a value that
+    /// simply fails to resolve, the runtime half of the enforcement).
+    ///
+    /// ```compile_fail
+    /// use omnibus_contracts::tokens::ElementId;
+    /// // No public constructor from a raw string exists on the token types.
+    /// let forged = ElementId::from("elem-0000000000000000");
+    /// ```
     ElementId,
     "elem"
 );
@@ -154,7 +165,7 @@ mod tests {
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = i as u8 + 1;
         }
-        MintKey::from_entropy_unchecked(bytes)
+        MintKey::try_from_entropy(bytes).expect("non-zero test entropy is a valid key")
     }
 
     #[test]

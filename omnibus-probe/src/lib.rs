@@ -189,6 +189,11 @@ impl PlatformProbe for Probe {
             ("pacman", "/usr/bin/pacman"),
             ("apt", "/usr/bin/apt"),
             ("dnf", "/usr/bin/dnf"),
+            // Clipboard fallbacks (roadmap 1.4.1 What, 1.5.5 How): the same
+            // binary-presence fact the portals adapter gates its clipboard
+            // backend on — wl-clipboard (Wayland) and xclip (X11).
+            ("wl-clipboard", "/usr/bin/wl-paste"),
+            ("xclip", "/usr/bin/xclip"),
         ] {
             if r.file_exists(path) {
                 backends_present.push(String::from(backend));
@@ -376,6 +381,44 @@ mod tests {
         // Floor constants stay in contracts (no magic numbers here).
         assert_eq!(omnibus_contracts::floors::SYSTEMD_FLOOR.major, 252);
         assert_eq!(ATSPI_FLOOR.minor, 50);
+    }
+
+    /// Roadmap 1.4.1 What ("wl-clipboard/xclip presence"): the clipboard
+    /// fallback binaries surface in `backends_present` — the same machine
+    /// fact the portals adapter gates its clipboard backend on (1.5.5).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn clipboard_backend_presence_surfaces_in_the_report() {
+        let runner = FakeRunner::default()
+            .with_file("/usr/bin/wl-paste", "ELF")
+            .with_file("/usr/bin/xclip", "ELF");
+        let probe = Probe::system(std::sync::Arc::new(runner));
+        let report = probe
+            .detect()
+            .await
+            .expect("detect never fails the session");
+        assert!(
+            report
+                .backends_present
+                .contains(&String::from("wl-clipboard")),
+            "wl-clipboard presence is a report fact: {:?}",
+            report.backends_present
+        );
+        assert!(
+            report.backends_present.contains(&String::from("xclip")),
+            "xclip presence is a report fact: {:?}",
+            report.backends_present
+        );
+        let empty = Probe::system(std::sync::Arc::new(FakeRunner::default()))
+            .detect()
+            .await
+            .expect("detect never fails the session");
+        assert!(
+            !empty
+                .backends_present
+                .iter()
+                .any(|b| b == "wl-clipboard" || b == "xclip"),
+            "absent binaries are never claimed as present"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

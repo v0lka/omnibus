@@ -332,6 +332,47 @@ async fn element_token_of_one_instance_is_stale_in_another() {
     assert!(matches!(foreign, Err(ContractError::ElementStale)));
 }
 
+/// AC 1.2.2: a FORGED token — never minted by any instance, fabricated from
+/// thin air in the exact wire shape the core mints (`elem-` + 16 hex chars) —
+/// is rejected with the typed `ElementStale` through the dispatch path, before
+/// any adapter call. The negative compile test on the token types
+/// (`omnibus-contracts/src/tokens.rs`) pins that a raw string cannot become a
+/// token value; this test pins the runtime half: a well-shaped forgery that
+/// arrives as a deserialized MCP argument resolves to nothing.
+#[tokio::test]
+async fn forged_token_is_rejected() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let facts = vec![common::fact(cap::DESKTOP_TREE, "present")];
+    let element_tool = join_tool("desktop", "element");
+
+    let core = common::build_core(
+        Registry {
+            a11y: Some(common::FakeA11y::new(facts)),
+            ..Registry::default()
+        },
+        GrantRegistry::new(),
+        ScopeManifests::default(),
+        pipeline_for(&common::session(6), &dir.path().join("forged.jsonl")),
+        platform(vec![]),
+        6,
+    );
+
+    // Well-shaped fabrications: the mint-shape prefix and length, including the
+    // all-zeros degenerate value. None of these was ever minted by this core.
+    for forged in ["elem-0000000000000000", "elem-deadbeefdeadbeef"] {
+        let rejected = tools::dispatch(
+            &core,
+            &element_tool,
+            args(&[("element_id", String::from(forged).into())]),
+        )
+        .await;
+        assert!(
+            matches!(rejected, Err(ContractError::ElementStale)),
+            "forged token {forged} must answer ElementStale"
+        );
+    }
+}
+
 /// AC 1.3.2 (FSM note): registration is structural — a slot is `Option<Arc<dyn
 /// Trait>>`, so a tool call cannot even name an unregistered adapter; the empty
 /// slot resolves to the typed `AdapterUnavailable`, never a panic. The runtime

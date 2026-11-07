@@ -1037,11 +1037,12 @@ pub fn schema_json(spec: &ToolSpec) -> serde_json::Value {
 }
 
 /// Ladder rung 1 marking for write-tool schemas (capability-model.md:
-/// "schema marks the limitation"): on a machine whose `pkg.undo` fact reports
-/// value `none` (apt: no transactional rollback), `pkg_install` and
+/// "schema marks the limitation"): on a machine whose `pkg.undo` fact carries
+/// the typed value `none` (apt: no transactional rollback), `pkg_install` and
 /// `pkg_remove` carry the degradation note — sourced from the caps entry's own
 /// `note` — while `pkg_undo` itself stays hidden through the ladder. Every
-/// other tool, and every other `pkg.undo` value, yields no note.
+/// other tool, and every other `pkg.undo` value, yields no note; the value is
+/// parsed through the contracts enum, so an off-registry string never marks.
 pub fn degradation_note(core: &crate::Core, tool: &str) -> Option<String> {
     if !matches!(tool, "pkg_install" | "pkg_remove") {
         return None;
@@ -1050,8 +1051,8 @@ pub fn degradation_note(core: &crate::Core, tool: &str) -> Option<String> {
     let undo_is_none = entry
         .value
         .as_ref()
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|value| value == "none");
+        .and_then(omnibus_contracts::capabilities::PkgUndoValue::from_json)
+        .is_some_and(|value| value == omnibus_contracts::capabilities::PkgUndoValue::None);
     if !undo_is_none {
         return None;
     }

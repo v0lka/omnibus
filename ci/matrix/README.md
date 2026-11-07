@@ -13,7 +13,7 @@ make packaging            # full validation: matrix, workflows, packaging artifa
 python3 ci/matrix/to_json.py < ci/matrix/t2.yml   # the exact JSON CI consumes
 ```
 
-## Leg map (all eight Linux platforms, tiers per specs/architecture/platform-matrix.md)
+## Leg map (all nine Linux platforms, tiers per specs/architecture/platform-matrix.md)
 
 | Leg | Tier | Level | Executes as |
 |---|---|---|---|
@@ -22,6 +22,7 @@ python3 ci/matrix/to_json.py < ci/matrix/t2.yml   # the exact JSON CI consumes
 | debian-trixie | T2 | smoke + contract suite | `debian:trixie` container |
 | debian-bookworm | T2 | smoke + contract suite | `debian:bookworm` container (on-the-floor row) |
 | ubuntu-lts | T2 | smoke + contract suite | `ubuntu:24.04` container |
+| ubuntu-26.04 | T2 | smoke + contract suite | `ubuntu:26.04` container (current LTS, systemd 259) |
 | mint | T2 | smoke + contract suite | stand-in: `ubuntu:24.04` container; the real Mint VM is manual-dispatch (REQ-EXT) |
 | fedora | T2 | smoke + contract suite | `fedora:latest` container (freshest portals) |
 | debian-bullseye | T3 | build only | `debian:bullseye` container |

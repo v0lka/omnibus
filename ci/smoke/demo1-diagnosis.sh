@@ -93,9 +93,9 @@ with McpClient(["./target/debug/omnibusd"]) as client:
         skip("wiki_search('failed suspend')", "tool hidden — no KB provider this session")
     else:
         result = client.call("wiki_search", {"text": "failed suspend", "limit": 3})
-        if result.is_error and result.error_code() in ("AdapterUnavailable", "NativeFailure"):
+        if result.is_error and result.error_code() in ("AdapterUnavailable", "NativeFailure", "TimeoutError"):
             skip("wiki_search('failed suspend')",
-                 f"honest refusal: {result.error_code()} (KB unreachable)")
+                 f"honest refusal: {result.error_code()} (KB unreachable/stalled — environment, not capability)")
         elif result.is_error:
             print(f"FAIL: wiki_search: {result.text[:300]}")
             failed = True

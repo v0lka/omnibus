@@ -63,9 +63,14 @@ merge block (R2, quality-gates.md).
 
 ## Token minting model (honest enforcement statement)
 
-`SessionId` / `ElementId` have no public value constructor — by review discipline
-only, with no R4 fixture pinning it; the enforcement is runtime on both halves.
-Minting requires a `MintKey` that the core builds from fresh per-process entropy
-and never shares, and the derived `Deserialize` accepts arbitrary strings: a
-foreign or stale token is not a constructor escape — it simply fails to resolve,
-and the core answers `ElementStale`. See `src/tokens.rs`.
+`SessionId` / `ElementId` have no public value constructor — pinned by a
+negative compile test (the `compile_fail` doctest in `src/tokens.rs`), so a
+forged string cannot become a token value in any crate. Minting requires a
+`MintKey`, whose only constructor is the checked `try_from_entropy` (the old
+unchecked escape hatch is removed); the composition root is its only legitimate
+caller. Rust cannot type-distinguish the composition root from an adapter, so
+that half stays runtime: the core never shares its key, and the derived
+`Deserialize` accepts arbitrary strings — a foreign, stale, or forged token
+mints nothing, it simply fails to resolve, and the core answers `ElementStale`
+(pinned end-to-end by the `forged_token_is_rejected` test in
+`omnibus-core/tests/session_lifecycle.rs`). See `src/tokens.rs`.

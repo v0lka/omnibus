@@ -83,8 +83,10 @@ pub const UNDO_NO_TRANSACTION_PAYLOAD: &str = "undo-no-transaction: no transacti
      nothing to return to";
 
 /// The `pkg.undo` capability VALUE this adapter reports (roadmap 2.3.1):
-/// dnf's history database makes undo transactional.
-pub const UNDO_VALUE: &str = "transactional";
+/// dnf's history database makes undo transactional — typed by the contracts
+/// enum.
+pub const UNDO_VALUE: omnibus_contracts::capabilities::PkgUndoValue =
+    omnibus_contracts::capabilities::PkgUndoValue::Transactional;
 
 /// The agent-visible undo semantics note the core surfaces from the report.
 pub const UNDO_VALUE_NOTE: &str =
@@ -694,7 +696,7 @@ impl PackageManager for DnfAdapter {
                     // Transactional undo: dnf inverts a recorded transaction
                     // (`history undo`), so the tool is real and reported.
                     status: String::from("present"),
-                    value: Some(serde_json::json!(UNDO_VALUE)),
+                    value: Some(UNDO_VALUE.to_json()),
                     note: Some(String::from(UNDO_VALUE_NOTE)),
                     remedy: None,
                 },
@@ -1334,7 +1336,7 @@ exit 97
             .find(|c| c.name == PKG_UNDO)
             .expect("undo fact present");
         assert_eq!(undo.status, "present");
-        assert_eq!(undo.value, Some(serde_json::json!(UNDO_VALUE)));
+        assert_eq!(undo.value, Some(UNDO_VALUE.to_json()));
         assert!(
             undo.note
                 .as_deref()

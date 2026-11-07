@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Smoke demo runner (roadmap 1.8.2): the three pitch demos as autotests.
+# Smoke demo runner (roadmap 1.8.2): the four pitch demos as autotests.
 #
 #   demo1  "Diagnosis in a minute" — journal(prev_boot) -> doctor -> wiki_search
 #   demo2  "Forms"                 — fs_read -> desktop.tree -> honest write refusal
 #   demo3  "After the update"      — pkg_list/info -> pkg_undo honest refusals
+#   demo4  "From scratch"          — capabilities -> doctor -> KB -> honest
+#                                    install refusal (the assembly arc, no VM)
 #
 # Safe on a developer machine: read-only by default, no system mutation, and
 # every demo exits 0 with "SKIP:" on stderr when a backend is honestly absent.
@@ -18,7 +20,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-DEMOS=(demo1-diagnosis demo2-forms demo3-undo)
+DEMOS=(demo1-diagnosis demo2-forms demo3-undo demo4-from-scratch)
 failed=()
 
 echo "== omnibus smoke demos (repo root: $REPO_ROOT) =="

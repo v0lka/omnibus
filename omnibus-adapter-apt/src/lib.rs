@@ -71,8 +71,10 @@ pub const WRITE_TIMEOUT_INDETERMINATE_PAYLOAD: &str = "timeout-indeterminate: wr
 /// so the wording is the agent-visible single source.
 pub const UNDO_UNAVAILABLE_NOTE: &str = "undo unavailable: apt has no transactional rollback (recovery = journal history + a manual fix plan)";
 
-/// The `pkg.undo` capability VALUE this adapter reports (roadmap 2.2.2).
-pub const UNDO_VALUE_NONE: &str = "none";
+/// The `pkg.undo` ladder STATUS this adapter reports (roadmap 2.2.2): an
+/// unrecognized ladder status resolves to absence, so `pkg_undo` stays hidden.
+/// The typed VALUE is `PkgUndoValue::None` from the contracts enum.
+pub const UNDO_STATUS_NONE: &str = "none";
 
 /// The transaction environment: apt must never prompt (roadmap 2.2.2 pins
 /// this pair in tests on the non-tty contract).
@@ -689,8 +691,8 @@ impl PackageManager for AptAdapter {
                     // Honest no-undo: an unrecognized ladder status resolves to
                     // absence in the core, so `pkg_undo` stays hidden and a
                     // direct call answers `CapabilityRequired` (roadmap 2.2.2).
-                    status: String::from(UNDO_VALUE_NONE),
-                    value: Some(serde_json::json!(UNDO_VALUE_NONE)),
+                    status: String::from(UNDO_STATUS_NONE),
+                    value: Some(omnibus_contracts::capabilities::PkgUndoValue::None.to_json()),
                     note: Some(String::from(UNDO_UNAVAILABLE_NOTE)),
                     remedy: None,
                 },
@@ -1109,7 +1111,10 @@ End-Date: 2024-06-01  08:00:09
             .find(|c| c.name == PKG_UNDO)
             .expect("pkg.undo fact present");
         assert_eq!(undo.status, "none");
-        assert_eq!(undo.value, Some(serde_json::json!("none")));
+        assert_eq!(
+            undo.value,
+            Some(omnibus_contracts::capabilities::PkgUndoValue::None.to_json())
+        );
         assert!(
             undo.note
                 .as_deref()

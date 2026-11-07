@@ -161,15 +161,19 @@ async fn portals_contract_suites_against_the_live_backend() {
         false
     };
     // Clipboard: the portal Clipboard channel is session-gated behind
-    // RemoteDesktop, so no standalone round-trip is promised (adapter note).
-    if adapter.clipboard_present() {
+    // RemoteDesktop, so the usable backend is the detected wl-clipboard/xclip
+    // binary pair (adapter detection). The flag is honest: true only when a
+    // backend exists, so the suite's round-trip leg runs exactly where the
+    // capability is reported present.
+    let clipboard_backend = adapter.clipboard_backend().is_some();
+    if adapter.clipboard_present() && !clipboard_backend {
         eprintln!(
-            "note: portal clipboard interface present but session-gated; \
-             the suite checks the degraded path"
+            "note: portal clipboard interface present but session-gated and no \
+             wl-clipboard/xclip backend exists; the suite checks the absent path"
         );
     }
     let fixture = PortalsFixture {
-        clipboard_backend: false,
+        clipboard_backend,
         screenshot_backend,
         notify_backend: adapter.notify_available(),
         marker_text: String::from("omnibus-suite-marker"),

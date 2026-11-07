@@ -44,6 +44,17 @@ Fedora adds transactional undo and the freshest portal interfaces.
 - Wayland: portal interfaces per `xdg-desktop-portal` version; X11 paths have no floor.
 - varlink is outside T2 guarantees (only with fresh systemd); the main path is D-Bus.
 
+## CI Session Axes
+
+- Container CI runs the session-kind axis only (X11 and Wayland on Arch
+  containers). The desktop-environment axis (GNOME/KDE) is deliberately not a
+  container-CI axis: no CI step branches on the session type, so the extra
+  legs would be byte-identical duplicates (rule R7). The axis enters container
+  CI together with the first step that actually consumes the session type —
+  the recorded criterion, mirrored in the header of
+  `.github/workflows/ci.yml`. Real desktop-environment coverage stays with
+  the VM legs (the Manjaro own matrix and the T2 VM legs).
+
 ## Invariants
 
 - A platform below a floor always deactivates the affected adapter and always explains the reason in

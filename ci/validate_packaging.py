@@ -598,6 +598,7 @@ EXPECTED_LEGS: dict[str, tuple[str, str, str]] = {
     "debian-trixie": ("t2", "smoke+contract", "container"),
     "debian-bookworm": ("t2", "smoke+contract", "container"),
     "ubuntu-lts": ("t2", "smoke+contract", "container"),
+    "ubuntu-26.04": ("t2", "smoke+contract", "container"),
     "mint": ("t2", "smoke+contract", "vm"),
     "fedora": ("t2", "smoke+contract", "container"),
     "debian-bullseye": ("t3", "build", "container"),
@@ -607,6 +608,7 @@ EXPECTED_CONTAINERS = {
     "debian-trixie": "debian:trixie",
     "debian-bookworm": "debian:bookworm",
     "ubuntu-lts": "ubuntu:24.04",
+    "ubuntu-26.04": "ubuntu:26.04",
     "fedora": "fedora:latest",
     "debian-bullseye": "debian:bullseye",
 }
@@ -636,7 +638,7 @@ def validate_matrix() -> None:
     missing = sorted(set(EXPECTED_LEGS) - set(by_id))
     extra = sorted(set(by_id) - set(EXPECTED_LEGS))
     check(
-        "matrix: all eight Linux platforms present (roadmap 2.6.2 matrix)",
+        "matrix: all nine Linux platforms present (roadmap 2.6.2 matrix incl. Ubuntu 26.04)",
         not missing and not extra,
         f"missing={missing} extra={extra}",
     )
@@ -729,8 +731,8 @@ def validate_matrix() -> None:
     if proc.returncode == 0:
         expanded = json.loads(proc.stdout)["include"]
         check(
-            "matrix: expansion carries all container-capable legs (5 reference + 1 stand-in)",
-            len(expanded) == 6,
+            "matrix: expansion carries all container-capable legs (6 reference + 1 stand-in)",
+            len(expanded) == 7,
             f"got {len(expanded)}",
         )
         mint = next((leg for leg in expanded if leg["id"] == "mint"), {})

@@ -36,7 +36,8 @@
 
 version: 1
 
-# All eight Linux platforms of the roadmap 2.6.2 matrix; tiers per
+# All nine Linux platforms of the roadmap 2.6.2 matrix (eight distro rows plus
+# the Ubuntu 26.04 LTS row added by Р-6); tiers per
 # specs/architecture/platform-matrix.md (Tier claims in release notes always
 # match that spec — the validator cross-checks the ids below).
 legs:
@@ -92,6 +93,23 @@ legs:
     level: smoke+contract
     kind: container
     container: ubuntu:24.04
+    package-manager: apt
+    pkgs: [git, gcc, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    runs:
+      build: true
+      contract-suite: true
+      smoke: true
+      specs: true
+      package-install: req-ext
+
+  - id: ubuntu-26.04
+    tier: t2
+    level: smoke+contract
+    kind: container
+    # The 26.04 LTS row (Р-6: systemd 259, released 2026-04 — see
+    # docs/verification/m0-findings.md Table 2): well above both floors, so
+    # this leg carries the full T2 smoke+contract scope on the current LTS.
+    container: ubuntu:26.04
     package-manager: apt
     pkgs: [git, gcc, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
     runs:

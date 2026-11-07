@@ -284,10 +284,29 @@ pub mod packages {
                 .iter()
                 .find(|c| c.name == crate::capabilities::PKG_UNDO)
                 .and_then(|c| c.value.clone());
+            let undo_typed = undo_fact
+                .as_ref()
+                .map(crate::capabilities::PkgUndoValue::from_json);
             out.check(
                 "pkg.undo value present when undo expected",
                 !fx.undo_expected || undo_fact.is_some(),
             );
+            // The value is typed: every reported pkg.undo value parses into the
+            // closed PkgUndoValue set (roadmap 1.2.3 AC2) — a raw string
+            // convention outside the enum is a suite failure.
+            out.check(
+                "pkg.undo value parses into the typed PkgUndoValue",
+                !undo_typed.as_ref().is_some_and(|parsed| parsed.is_none()),
+            );
+            if fx.undo_expected {
+                out.check(
+                    "pkg.undo is typed and not none when undo is expected",
+                    matches!(
+                        undo_typed,
+                        Some(Some(parsed)) if parsed != crate::capabilities::PkgUndoValue::None
+                    ),
+                );
+            }
         }
         let p = make();
         let list = p.list(PackageListRequest { limit: Some(5000) }).await;

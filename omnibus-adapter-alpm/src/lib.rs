@@ -91,15 +91,16 @@ const BLOCKING_BUDGET: Duration = Duration::from_secs(9);
 /// documented constant instead of tracking the file size; entries older than
 /// the tail are invisible to history and undo. 8 MiB covers years of upgrades.
 const HISTORY_TAIL_BYTES: u64 = 8 * 1024 * 1024;
-/// The `pkg.undo` semantics this adapter genuinely implements. Cache packages
-/// load with pacman's local-file signature policy (`LocalFileSigLevel =
-/// Optional` as shipped): a missing detached `.sig` is tolerated, while a
-/// PRESENT signature must fully verify — marginal-trust and unknown-key
-/// signatures fail the load. Undo is a write path: it installs nothing that
-/// no trusted key vouches for, and a cache entry whose signature does not
-/// verify is an honest `transaction: load` failure, never a silently
-/// accepted write.
-const UNDO_VALUE: &str = "cache-downgrade";
+/// The `pkg.undo` semantics this adapter genuinely implements, typed by the
+/// contracts enum: cache downgrade. Cache packages load with pacman's
+/// local-file signature policy (`LocalFileSigLevel = Optional` as shipped): a
+/// missing detached `.sig` is tolerated, while a PRESENT signature must fully
+/// verify — marginal-trust and unknown-key signatures fail the load. Undo is a
+/// write path: it installs nothing that no trusted key vouches for, and a
+/// cache entry whose signature does not verify is an honest `transaction:
+/// load` failure, never a silently accepted write.
+const UNDO_VALUE: omnibus_contracts::capabilities::PkgUndoValue =
+    omnibus_contracts::capabilities::PkgUndoValue::CacheDowngrade;
 
 /// One unit of libalpm work for the worker thread.
 type Job = Box<dyn FnOnce(&mut Alpm) + Send + 'static>;
@@ -274,7 +275,7 @@ impl PackageManager for AlpmAdapter {
                     name: String::from(PKG_UNDO),
                     ver: String::from(CONTRACT_VERSION),
                     status: String::from("present"),
-                    value: Some(serde_json::json!(UNDO_VALUE)),
+                    value: Some(UNDO_VALUE.to_json()),
                     note: Some(String::from(
                         "downgrade to the previous version from the pacman cache, located via history",
                     )),

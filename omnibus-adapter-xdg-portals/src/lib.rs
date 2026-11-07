@@ -12,15 +12,21 @@
 //! - screenshot: present when the portal publishes the Screenshot interface;
 //!   a user denial is a typed [`ContractError::ScopeDenied`].
 //! - clipboard: the portal Clipboard interface is session-gated — a usable
-//!   clipboard channel requires a RemoteDesktop session, whose creation is out
-//!   of scope for omnibus (no input-emulation surface, ADR-009). The capability
-//!   is therefore reported degraded and clipboard calls answer
-//!   [`ContractError::AdapterUnavailable`] rather than pretending.
+//!   clipboard channel would require a RemoteDesktop session, whose creation is
+//!   out of scope for omnibus (no input-emulation surface, ADR-009). The usable
+//!   backend is therefore the platform's own clipboard tooling (roadmap 1.5.5
+//!   How): `wl-clipboard` (wl-copy/wl-paste) with an `xclip` fallback, detected
+//!   by binary presence. The capability is reported present only when a backend
+//!   exists; without one the fact is absent (the ladder hides `clip_read`/
+//!   `clip_write`, a direct call answers [`ContractError::AdapterUnavailable`])
+//!   and the notes explain the session-gated portal channel.
 //! - notify: present when the notification service is on the bus.
 
 mod wire;
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -64,6 +70,274 @@ const CALL_BUDGET: Duration = Duration::from_secs(5);
 /// 4K PNG stays well under 10 MiB) and far below anything that could
 /// pressure the daemon.
 const MAX_SCREENSHOT_BYTES: u64 = 16 * 1024 * 1024;
+/// The clipboard read cap: one `clip_read` never buffers more than this much
+/// of the backend's stdout (the screenshot cap discipline, in the clipboard
+/// wording — 2 MiB is far above any legitimate text clipboard and matches the
+/// fs read ceiling).
+const MAX_CLIPBOARD_BYTES: u64 = 2 * 1024 * 1024;
+/// Inner budget for one clipboard backend subprocess (the same wall-clock
+/// discipline as the synchronous portal calls).
+const CLIPBOARD_BUDGET: Duration = Duration::from_secs(5);
+
+/// The usable clipboard backend (roadmap 1.5.5 How): the portal Clipboard
+/// channel is session-gated behind RemoteDesktop, so a real round trip rides
+/// the platform's own clipboard tooling, detected by binary presence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardBackend {
+    /// wl-clipboard: `wl-copy` writes, `wl-paste` reads (Wayland, and XWayland
+    /// sessions where the tools are installed).
+    WlClipboard { copy: PathBuf, paste: PathBuf },
+    /// xclip: one binary reads (`-o`) and writes (`-i`) the CLIPBOARD
+    /// selection (X11).
+    Xclip { bin: PathBuf },
+}
+
+impl ClipboardBackend {
+    /// The agent-visible backend name for the capability note.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::WlClipboard { .. } => "wl-clipboard",
+            Self::Xclip { .. } => "xclip",
+        }
+    }
+
+    /// Detection by binary presence in the given directories, wl-clipboard
+    /// first (the Wayland-native pair), xclip as the X11 fallback. Both
+    /// wl-clipboard binaries must exist: a half-installed backend would fail
+    /// exactly one direction of the round trip.
+    pub fn detect_in(dirs: &[PathBuf]) -> Option<Self> {
+        for dir in dirs {
+            let copy = dir.join("wl-copy");
+            let paste = dir.join("wl-paste");
+            if copy.is_file() && paste.is_file() {
+                return Some(Self::WlClipboard { copy, paste });
+            }
+        }
+        for dir in dirs {
+            let bin = dir.join("xclip");
+            if bin.is_file() {
+                return Some(Self::Xclip { bin });
+            }
+        }
+        None
+    }
+
+    /// The standard detection set: `/usr/bin`, the same fixed location the
+    /// probe scans (a PATH walk would make the capability fact depend on how
+    /// the daemon was launched — the fact must be a machine fact).
+    pub fn detect() -> Option<Self> {
+        Self::detect_in(&[PathBuf::from("/usr/bin")])
+    }
+
+    /// Reads the clipboard as text through this backend.
+    async fn read(&self) -> Result<ClipboardContent, ContractError> {
+        let (program, args): (&Path, Vec<&str>) = match self {
+            Self::WlClipboard { paste, .. } => (
+                paste.as_path(),
+                vec!["--no-newline", "--type", "text/plain"],
+            ),
+            Self::Xclip { bin } => (
+                bin.as_path(),
+                vec!["-selection", "clipboard", "-o", "-t", "text/plain"],
+            ),
+        };
+        let out = run_bounded(
+            program,
+            &args,
+            None,
+            CLIPBOARD_BUDGET,
+            MAX_CLIPBOARD_BYTES,
+            true,
+        )
+        .await?;
+        Ok(ClipboardContent {
+            mime: String::from("text/plain"),
+            text: String::from_utf8_lossy(&out.stdout).into_owned(),
+            size_bytes: u64::try_from(out.stdout.len()).unwrap_or(u64::MAX),
+        })
+    }
+
+    /// Writes text to the clipboard through this backend.
+    async fn write(&self, text: &str) -> Result<(), ContractError> {
+        let (program, args): (&Path, Vec<&str>) = match self {
+            Self::WlClipboard { copy, .. } => (copy.as_path(), vec!["--type", "text/plain"]),
+            Self::Xclip { bin } => (
+                bin.as_path(),
+                vec!["-selection", "clipboard", "-i", "-t", "text/plain"],
+            ),
+        };
+        run_bounded(
+            program,
+            &args,
+            Some(text.as_bytes().to_vec()),
+            CLIPBOARD_BUDGET,
+            MAX_CLIPBOARD_BYTES,
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+/// One bounded backend run's captured stdout (read path only; the write path
+/// is fire-and-forget — see [`run_bounded`]).
+struct BackendOutput {
+    stdout: Vec<u8>,
+}
+
+/// Spawns one clipboard-backend subprocess under the wall-clock budget.
+///
+/// Two shapes, because the two directions of the round trip behave
+/// differently: `wl-copy`/`xclip -i` fork a resident child that serves later
+/// paste requests and INHERIT the spawned process's pipes — capturing their
+/// output would never see EOF, so the write path runs fire-and-forget
+/// (`capture = false`: stdin piped, stdout/stderr to null, the direct child's
+/// exit status checked). The read path (`wl-paste`/`xclip -o`) exits after
+/// printing, and its stdout is captured under a hard byte cap (the screenshot
+/// `take` discipline — a backend that streams more than the cap loses the
+/// tail and the run is a typed cap refusal). Every failure is a contract
+/// error; the budget kills a stalled child (`kill_on_drop`).
+async fn run_bounded(
+    program: &Path,
+    args: &[&str],
+    stdin: Option<Vec<u8>>,
+    budget: Duration,
+    cap: u64,
+    capture: bool,
+) -> Result<BackendOutput, ContractError> {
+    use tokio::io::AsyncReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
+
+    let map_err = |what: String, e: std::io::Error| match e.kind() {
+        std::io::ErrorKind::NotFound => ContractError::AdapterUnavailable,
+        _ => ContractError::NativeFailure {
+            code: 1,
+            payload: format!("{what}: {e}"),
+        },
+    };
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(if capture {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stderr(if capture {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        // A timed-out backend child must die with the call.
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .map_err(|e| map_err(format!("clipboard backend {}", program.display()), e))?;
+
+    let stdin_handle = if stdin.is_some() {
+        Some(
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| ContractError::NativeFailure {
+                    code: 1,
+                    payload: format!("clipboard backend {} has no stdin pipe", program.display()),
+                })?,
+        )
+    } else {
+        None
+    };
+    let mut stdout_handle = if capture {
+        Some(
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| ContractError::NativeFailure {
+                    code: 1,
+                    payload: format!("clipboard backend {} has no stdout pipe", program.display()),
+                })?,
+        )
+    } else {
+        None
+    };
+    let mut stderr_handle = if capture { child.stderr.take() } else { None };
+
+    let total = async {
+        if let Some(input) = stdin {
+            let mut handle = stdin_handle.expect("stdin piped when input is present");
+            handle
+                .write_all(&input)
+                .await
+                .map_err(|e| map_err(String::from("clipboard stdin"), e))?;
+            handle
+                .shutdown()
+                .await
+                .map_err(|e| map_err(String::from("clipboard stdin"), e))?;
+        }
+        let stdout = if stdout_handle.is_some() {
+            let handle = stdout_handle
+                .as_mut()
+                .expect("stdout piped in capture mode");
+            let mut buf: Vec<u8> = Vec::new();
+            // +1 turns an oversized clipboard into a typed cap refusal
+            // instead of a silently bigger buffer.
+            let took = {
+                // Borrow the handle: `take` consumes its receiver, and the
+                // handle must survive so it can be dropped (SIGPIPE for a
+                // still-writing backend) below.
+                let mut limited = handle.take(cap + 1);
+                limited
+                    .read_to_end(&mut buf)
+                    .await
+                    .map_err(|e| map_err(String::from("clipboard stdout"), e))?
+            };
+            // Release the OWNED pipe early: a backend still writing gets
+            // SIGPIPE and exits instead of parking `wait()` until the budget
+            // runs out.
+            drop(stdout_handle.take());
+            if u64::try_from(took).unwrap_or(u64::MAX) > cap {
+                return Err(ContractError::Unsupported {
+                    reason: format!(
+                        "clipboard: {took} bytes exceeds the {} KiB per-call cap",
+                        cap / 1024
+                    ),
+                });
+            }
+            buf
+        } else {
+            Vec::new()
+        };
+        let mut stderr: Vec<u8> = Vec::new();
+        if let Some(handle) = stderr_handle.as_mut() {
+            let _ = handle.take(64 * 1024).read_to_end(&mut stderr).await;
+        }
+        drop(stderr_handle);
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| map_err(format!("clipboard backend {}", program.display()), e))?;
+        if !status.success() {
+            return Err(ContractError::NativeFailure {
+                code: 1,
+                payload: format!(
+                    "clipboard backend {} failed ({}): {}",
+                    program.display(),
+                    status,
+                    String::from_utf8_lossy(&stderr).trim()
+                ),
+            });
+        }
+        Ok(BackendOutput { stdout })
+    };
+    tokio::time::timeout(budget, total)
+        .await
+        .map_err(|_| ContractError::TimeoutError)?
+}
 
 /// Live portal backend over the session bus.
 #[derive(Clone)]
@@ -77,6 +351,9 @@ pub struct PortalsAdapter {
     clipboard_iface: bool,
     /// The notification service answers on the session bus.
     notify_available: bool,
+    /// The usable clipboard backend (wl-clipboard/xclip), detected by binary
+    /// presence in `/usr/bin` — `None` means clip_read/clip_write are hidden.
+    clipboard_backend: Option<ClipboardBackend>,
 }
 
 impl PortalsAdapter {
@@ -114,12 +391,19 @@ impl PortalsAdapter {
             screenshot_iface,
             clipboard_iface,
             notify_available,
+            clipboard_backend: ClipboardBackend::detect(),
         })
     }
 
     /// Whether the portal service is on the bus.
     pub fn portal_present(&self) -> bool {
         self.portal_present
+    }
+
+    /// The detected clipboard backend, if any (roadmap 1.5.5: wl-clipboard or
+    /// xclip, by binary presence).
+    pub fn clipboard_backend(&self) -> Option<&ClipboardBackend> {
+        self.clipboard_backend.as_ref()
     }
 
     /// Whether the Screenshot portal interface is published.
@@ -191,22 +475,24 @@ impl PortalsAdapter {
         }
     }
 
-    fn clipboard_fact(&self) -> CapabilityFact {
-        if self.clipboard_present() {
-            self.capability_fact(
-                PORTAL_CLIPBOARD,
-                "degraded",
-                "the portal Clipboard interface is published but session-gated: a usable \
-                 clipboard channel requires a RemoteDesktop session, which omnibus does not \
-                 create (no input-emulation surface)",
-            )
-        } else {
-            self.capability_fact(
-                PORTAL_CLIPBOARD,
-                "degraded",
-                "no portal Clipboard interface on this machine",
-            )
-        }
+    /// The clipboard capability fact — present only when a usable backend
+    /// exists (roadmap 1.5.5: the capability follows the backend, never the
+    /// session-gated portal channel). `None` means the fact is absent, so the
+    /// ladder hides `clip_read`/`clip_write` (AC: a stand without a backend
+    /// hides the tools; the capabilities document explains via the notes).
+    fn clipboard_fact(&self) -> Option<CapabilityFact> {
+        let backend = self.clipboard_backend.as_ref()?;
+        let note = match backend {
+            ClipboardBackend::WlClipboard { .. } => {
+                "clipboard read/write via wl-clipboard (wl-copy/wl-paste); the portal \
+                 Clipboard channel stays unused (session-gated behind RemoteDesktop)"
+            }
+            ClipboardBackend::Xclip { .. } => {
+                "clipboard read/write via xclip (CLIPBOARD selection); the portal \
+                 Clipboard channel stays unused (session-gated behind RemoteDesktop)"
+            }
+        };
+        Some(self.capability_fact(PORTAL_CLIPBOARD, "present", note))
     }
 
     fn notify_fact(&self) -> CapabilityFact {
@@ -237,15 +523,23 @@ impl PortalsAdapter {
         } else {
             String::from("no notification service on the session bus")
         });
+        notes.push(match self.clipboard_backend.as_ref() {
+            Some(backend) => format!("clipboard backend: {}", backend.name()),
+            None => String::from(
+                "no clipboard backend (wl-clipboard/xclip absent): clip_read/clip_write are \
+                 hidden; the portal Clipboard channel is session-gated behind RemoteDesktop \
+                 and is never created",
+            ),
+        });
+        let mut capabilities = vec![self.screenshot_fact(), self.notify_fact()];
+        if let Some(clipboard) = self.clipboard_fact() {
+            capabilities.push(clipboard);
+        }
         AdapterReport {
             adapter: String::from("xdg-portals"),
             subsystem: String::from("portals"),
             contract_version: String::from(CONTRACT_VERSION),
-            capabilities: vec![
-                self.screenshot_fact(),
-                self.clipboard_fact(),
-                self.notify_fact(),
-            ],
+            capabilities,
             notes,
         }
     }
@@ -443,17 +737,24 @@ impl ScreenCapture for PortalsAdapter {
     }
 
     async fn clip_read(&self) -> Result<ClipboardContent, ContractError> {
-        // The portal Clipboard channel is session-gated (see module docs):
-        // without a RemoteDesktop session there is no reachable clipboard
-        // backend, so the honest answer is the absence of an active adapter.
-        let _ = self.clipboard_present();
-        Err(ContractError::AdapterUnavailable)
+        // The usable backend is wl-clipboard/xclip by binary presence; without
+        // one there is no reachable clipboard backend (the portal channel is
+        // session-gated and never created), so the honest answer is the
+        // absence of an active adapter — and the ladder hides the tool.
+        match self.clipboard_backend.as_ref() {
+            Some(backend) => backend.read().await,
+            None => Err(ContractError::AdapterUnavailable),
+        }
     }
 
-    async fn clip_write(&self, _content: ClipboardContent) -> Result<(), ContractError> {
-        // Same session gate as clip_read; writes are additionally grant-gated
-        // in the core, never here.
-        Err(ContractError::AdapterUnavailable)
+    async fn clip_write(&self, content: ClipboardContent) -> Result<(), ContractError> {
+        // Same backend gate as clip_read; writes are additionally grant-gated
+        // in the core, never here. Only the text payload rides the backend:
+        // the text/plain channel is what both toolchains expose.
+        match self.clipboard_backend.as_ref() {
+            Some(backend) => backend.write(&content.text).await,
+            None => Err(ContractError::AdapterUnavailable),
+        }
     }
 
     async fn screenshot(
@@ -510,6 +811,7 @@ mod tests {
             screenshot_iface: false,
             clipboard_iface: false,
             notify_available: false,
+            clipboard_backend: None,
         };
         let report = ScreenCapture::report(&adapter);
         let statuses: Vec<(String, String)> = report
@@ -518,6 +820,22 @@ mod tests {
             .map(|fact| (fact.name.clone(), fact.status.clone()))
             .collect();
         assert!(statuses.iter().all(|(_, status)| status == "degraded"));
+        // Without a clipboard backend the fact is ABSENT (the ladder hides
+        // clip_read/clip_write — AC 1.5.5), explained in the notes.
+        assert!(
+            report
+                .capabilities
+                .iter()
+                .all(|fact| fact.name != PORTAL_CLIPBOARD),
+            "no backend: the clipboard fact must be absent, not degraded"
+        );
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|note| note.contains("no clipboard backend")),
+            "the notes explain the hidden clipboard tools"
+        );
         // CoN rule: names come from the registry constants.
         assert!(
             report
@@ -539,6 +857,7 @@ mod tests {
             screenshot_iface: true,
             clipboard_iface: true,
             notify_available: true,
+            clipboard_backend: None,
         };
         let report = ScreenCapture::report(&adapter);
         let screenshot = report
@@ -548,15 +867,52 @@ mod tests {
             .map(|fact| fact.status.clone())
             .unwrap_or_default();
         assert_eq!(screenshot, "present");
-        // Clipboard stays degraded even with the interface published: it is
-        // session-gated behind RemoteDesktop.
+        // A published portal Clipboard interface is still no backend: the
+        // channel is session-gated behind RemoteDesktop, so without
+        // wl-clipboard/xclip the fact is absent and the tools stay hidden.
+        assert!(
+            !report
+                .capabilities
+                .iter()
+                .any(|fact| fact.name == PORTAL_CLIPBOARD),
+            "session-gated portal channel is never reported as a usable backend"
+        );
+    }
+
+    /// AC 1.5.5: the capability follows the backend — with wl-clipboard
+    /// detected, the fact is present and names the backend.
+    #[tokio::test]
+    async fn backend_presence_makes_the_clipboard_fact_present() {
+        let Some(conn) = live_connection().await else {
+            eprintln!("skip: no session bus on this machine");
+            return;
+        };
+        let adapter = PortalsAdapter {
+            conn,
+            portal_present: false,
+            screenshot_iface: false,
+            clipboard_iface: false,
+            notify_available: false,
+            clipboard_backend: Some(ClipboardBackend::WlClipboard {
+                copy: PathBuf::from("/usr/bin/wl-copy"),
+                paste: PathBuf::from("/usr/bin/wl-paste"),
+            }),
+        };
+        let report = ScreenCapture::report(&adapter);
         let clipboard = report
             .capabilities
             .iter()
             .find(|fact| fact.name == PORTAL_CLIPBOARD)
-            .map(|fact| fact.status.clone())
-            .unwrap_or_default();
-        assert_eq!(clipboard, "degraded");
+            .expect("clipboard fact present with a backend");
+        assert_eq!(clipboard.status, "present");
+        assert!(
+            clipboard
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("wl-clipboard")),
+            "the note names the backend, got {:?}",
+            clipboard.note
+        );
     }
 
     #[tokio::test]
@@ -571,6 +927,7 @@ mod tests {
             screenshot_iface: false,
             clipboard_iface: false,
             notify_available: false,
+            clipboard_backend: None,
         };
         use omnibus_contracts::spi::portals::{Notify as _, ScreenCapture as _};
         let shot = adapter
@@ -664,5 +1021,189 @@ mod tests {
             other => panic!("over-cap read must be refused, got {other:?}"),
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ---- wl-clipboard / xclip fallback backend (roadmap 1.5.5) ----
+
+    /// An executable fixture script standing in for a backend binary; the
+    /// backend tests never touch a bus, so they run on headless machines too.
+    fn fixture_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write fixture script");
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the fixture executable");
+        path
+    }
+
+    /// The wl pair over a state file: wl-copy stores stdin, wl-paste emits it.
+    fn wl_fixture(dir: &Path) -> (PathBuf, PathBuf) {
+        let state = dir.join("state.txt");
+        let state_str = state.to_str().expect("utf8 temp path").to_owned();
+        let paste = fixture_script(
+            dir,
+            "wl-paste",
+            &format!("#!/bin/sh\ncat \"{state_str}\" 2>/dev/null || true\n"),
+        );
+        let copy = fixture_script(
+            dir,
+            "wl-copy",
+            &format!("#!/bin/sh\ncat > \"{state_str}\"\n"),
+        );
+        (copy, paste)
+    }
+
+    /// AC 1.5.5: the round trip rides the fallback backend — write then read
+    /// preserves the text, and the content carries the text/plain mime.
+    #[tokio::test]
+    async fn clipboard_round_trip_via_the_wlclipboard_backend() {
+        let dir = scratch("wl-backend");
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let (copy, paste) = wl_fixture(&dir);
+        let backend = ClipboardBackend::WlClipboard { copy, paste };
+        backend
+            .write("omnibus-clipboard-marker")
+            .await
+            .expect("fixture write");
+        let content = backend.read().await.expect("fixture read");
+        assert_eq!(content.mime, "text/plain");
+        assert_eq!(content.text, "omnibus-clipboard-marker");
+        assert_eq!(
+            content.size_bytes,
+            u64::try_from(content.text.len()).unwrap_or(u64::MAX)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The X11 fallback: one binary, `-o` reads the stored selection.
+    #[tokio::test]
+    async fn clipboard_round_trip_via_the_xclip_backend() {
+        let dir = scratch("xclip-backend");
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let state = dir.join("state.txt");
+        let state_str = state.to_str().expect("utf8 temp path").to_owned();
+        let bin = fixture_script(
+            dir.as_path(),
+            "xclip",
+            &format!(
+                "#!/bin/sh\nfor arg in \"$@\"; do \
+                 [ \"$arg\" = \"-o\" ] && exec cat \"{state_str}\"; done\n\
+                 cat > \"{state_str}\"\n"
+            ),
+        );
+        let backend = ClipboardBackend::Xclip { bin };
+        backend.write("xclip-marker").await.expect("fixture write");
+        let content = backend.read().await.expect("fixture read");
+        assert_eq!(content.text, "xclip-marker");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An empty clipboard is an honest empty content, never an error.
+    #[tokio::test]
+    async fn empty_clipboard_reads_as_empty_content() {
+        let dir = scratch("wl-empty");
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let (copy, paste) = wl_fixture(&dir);
+        let backend = ClipboardBackend::WlClipboard { copy, paste };
+        let content = backend.read().await.expect("empty read succeeds");
+        assert_eq!(content.text, "");
+        assert_eq!(content.size_bytes, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A backend that fails the read (wl-paste: the clipboard holds no text)
+    /// answers a typed NativeFailure carrying the backend's own stderr.
+    #[tokio::test]
+    async fn failing_backend_answers_native_failure() {
+        let dir = scratch("wl-fail");
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let paste = fixture_script(
+            dir.as_path(),
+            "wl-paste",
+            "#!/bin/sh\necho 'no text type on clipboard' >&2\nexit 1\n",
+        );
+        let copy = fixture_script(dir.as_path(), "wl-copy", "#!/bin/sh\ncat >/dev/null\n");
+        let backend = ClipboardBackend::WlClipboard { copy, paste };
+        let refused = backend.read().await;
+        match refused {
+            Err(ContractError::NativeFailure { code: 1, payload }) => {
+                assert!(payload.contains("clipboard backend"), "{payload}");
+                assert!(payload.contains("no text type"), "{payload}");
+            }
+            other => panic!("a failing backend must be a NativeFailure, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The read cap: an oversized backend stream is a typed refusal (the
+    /// screenshot cap discipline), never an unbounded buffer.
+    #[tokio::test]
+    async fn oversized_clipboard_read_is_a_typed_cap_refusal() {
+        let dir = scratch("wl-cap");
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        // 3 MiB of zeros: past the 2 MiB cap (/dev/zero exists on Linux).
+        let paste = fixture_script(
+            dir.as_path(),
+            "wl-paste",
+            "#!/bin/sh\nhead -c 3000000 /dev/zero\n",
+        );
+        let copy = fixture_script(dir.as_path(), "wl-copy", "#!/bin/sh\ncat >/dev/null\n");
+        let backend = ClipboardBackend::WlClipboard { copy, paste };
+        let refused = backend.read().await;
+        match refused {
+            Err(ContractError::Unsupported { reason }) => {
+                assert!(reason.contains("per-call cap"), "{reason}");
+            }
+            other => panic!("over-cap clipboard read must be refused, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A binary that vanished between detection and the call (or a broken
+    /// install) answers AdapterUnavailable, not a panic.
+    #[tokio::test]
+    async fn missing_backend_binary_answers_adapter_unavailable() {
+        let backend = ClipboardBackend::Xclip {
+            bin: PathBuf::from("/nonexistent/omnibus-xclip"),
+        };
+        let read = backend.read().await;
+        assert!(matches!(read, Err(ContractError::AdapterUnavailable)));
+    }
+
+    /// Detection: wl-clipboard requires BOTH binaries (a half-installed pair
+    /// would fail one direction of the round trip); xclip is the fallback;
+    /// nothing installed is an honest None.
+    #[test]
+    fn detection_prefers_wlclipboard_and_falls_back_to_xclip() {
+        let dir = scratch("detect");
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        assert_eq!(
+            ClipboardBackend::detect_in(std::slice::from_ref(&dir)),
+            None,
+            "nothing installed: honest absence"
+        );
+        let xclip = fixture_script(dir.as_path(), "xclip", "#!/bin/sh\ntrue\n");
+        assert_eq!(
+            ClipboardBackend::detect_in(std::slice::from_ref(&dir)),
+            Some(ClipboardBackend::Xclip { bin: xclip }),
+            "a lone xclip is the X11 fallback"
+        );
+        let (copy, paste) = wl_fixture(&dir);
+        assert_eq!(
+            ClipboardBackend::detect_in(std::slice::from_ref(&dir)),
+            Some(ClipboardBackend::WlClipboard {
+                copy: copy.clone(),
+                paste: paste.clone()
+            }),
+            "the complete wl pair wins over xclip"
+        );
+        std::fs::remove_file(&paste).expect("drop wl-paste");
+        let xclip = dir.join("xclip");
+        assert_eq!(
+            ClipboardBackend::detect_in(std::slice::from_ref(&dir)),
+            Some(ClipboardBackend::Xclip { bin: xclip }),
+            "a half-installed wl pair falls back to xclip"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

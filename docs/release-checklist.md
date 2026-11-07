@@ -22,7 +22,7 @@ Run from the repo root, in this order. A red gate has no override.
 | G6 | R4 boundary lints | `cargo run -p omnibus-lints --bin omnibus-lints` | `OK (R4-COP, R4-NATIVE, R4-CON, R4-EDGES green)` |
 | G7 | R4 red/green fixtures | `cargo test -p omnibus-lints --test fixtures` | 10 passed, 0 failed |
 | G8 | Coverage floor | `cargo llvm-cov --workspace --summary-only --fail-under-lines 75` | exit 0 |
-| G9 | Packaging + matrix validator | `make packaging` | `all green: 150 checks passed` |
+| G9 | Packaging + matrix validator | `make packaging` | `all green: 156 checks passed` |
 | G10 | Smoke demos | `ci/smoke/run-demos.sh` | `all demos passed (skips are honest and allowed)` |
 
 Notes:
@@ -38,7 +38,7 @@ Notes:
   from the dnf adapter) is the template — fix the race, then require several
   consecutive green runs.
 
-## 2. Matrix legs — 8 Linux platforms (roadmap 2.6.2 AC1)
+## 2. Matrix legs — 9 Linux platforms (roadmap 2.6.2 AC1)
 
 The authoritative leg list is `ci/matrix/t2.yml` (schema-validated by G9
 against `specs/architecture/platform-matrix.md`). Tier definitions live in
@@ -54,6 +54,7 @@ honest, no guarantees.
 | debian-trixie | T2 | build + `cargo test --workspace` + demos inside the reference container | `.github/workflows/t2.yml` (container) |
 | debian-bookworm | T2 | same, on the floor: systemd 252 active, at-spi2 2.46 below the 2.50 floor so `desktop.*` hidden — and that state visible in `capabilities()` | t2.yml (container) |
 | ubuntu-lts | T2 | same as trixie | t2.yml (container) |
+| ubuntu-26.04 | T2 | same as trixie on the 26.04 LTS (systemd 259, above both floors) | t2.yml (container) |
 | mint | T2 | VM leg (`kind: vm`), documented ubuntu:24.04 stand-in | t2.yml (skipped until `T2_VM_ENABLED`) |
 | fedora | T2 | same as trixie + the dnf transactional-undo legs | t2.yml (container) |
 | debian-bullseye | T3 | build only (systemd 247 < 252: the pkg family must stay hidden) | t2.yml (build-only) |
@@ -104,7 +105,7 @@ Human, release-time actions:
 
 The v1.0 release notes must contain, in this order:
 
-1. **The 8-leg matrix status table** — per leg: tier, result (green per its
+1. **The 9-leg matrix status table** — per leg: tier, result (green per its
    tier / did not run / REQ-EXT), and the workflow that owns it (§2 above).
 2. **The tier ↔ capabilities divergence table — the gate.** For every leg
    that ran, compare the platform's published `capabilities()` document

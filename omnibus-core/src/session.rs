@@ -161,7 +161,12 @@ mod tests {
         let s2 = ctx();
         let foreign = s2.mint_element(String::from("other"));
         assert_eq!(s1.resolve_element(foreign.as_str()), None);
-        let forged = ElementId::mint(&MintKey::from_entropy_unchecked([9u8; 32]), "forged", 1);
+        // A token minted under a DIFFERENT key (not this instance's, not any
+        // real instance's): same rejection half as a hand-forged string — the
+        // integration-level forgery case is pinned by `forged_token_is_rejected`
+        // (tests/session_lifecycle.rs).
+        let foreign_key = MintKey::try_from_entropy([9u8; 32]).expect("non-zero test key");
+        let forged = ElementId::mint(&foreign_key, "forged", 1);
         assert_eq!(s1.resolve_element(forged.as_str()), None);
     }
 
