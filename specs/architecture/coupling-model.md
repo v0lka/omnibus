@@ -9,9 +9,9 @@ OS adapter requires zero core changes. Source: `omnibus-architecture.md` §8.
 ## Component Map
 
 - Core (`omnibus-core`): facade, sessions, scopes, audit, capability registry, doctor orchestration.
-- Contracts (`omnibus-contracts`): 12 SPI traits (10 subsystems), DTOs, capability registry, error
+- Contracts (`omnibus-contracts`): 14 SPI traits (12 subsystems), DTOs, capability registry, error
   taxonomy, addressing types.
-- Adapters: ~15 crates (subsystem x family) + probe.
+- Adapters: ~21 crates (subsystem x family) + probe.
 - Edges: core -> adapters via `dyn Trait` (probe-assembled registry); adapters -> contracts;
   adapter <-> adapter forbidden (P6).
 
@@ -51,7 +51,9 @@ dependency-rules CI job fails any adapter that imports `omnibus_core`. The rever
 is contained entirely inside one adapter crate.
 
 The only case that touches the core is a new subsystem type (new trait) - an additive extension; in
-v1 exactly two, both just-in-time: `NetworkStatus` (task 2.2.3) and `AppIntentsBridge` (task 3.6.2).
+v1 exactly two, both just-in-time: `NetworkStatus` (task 2.2.3) and `AppIntentsBridge` (task 3.6.2);
+v1.5 adds two more, also just-in-time: `AppLauncher` (task 2.7.1) and `ProcessTelemetry`
+(task 2.8.1).
 
 ## Red Flags the Architecture Avoids
 

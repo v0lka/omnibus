@@ -13,7 +13,7 @@ spec fixes the format, the registry, detection levels, and the degradation ladde
 contracts. Registry constants live in `omnibus-contracts`; name literals elsewhere in code are
 forbidden (CI lint).
 
-## Registry (20 constants; 18 shipped, +2 with MS3)
+## Registry (26 constants; 18 shipped, +6 with v1.5, +2 with MS3)
 
 | Domain | Constants |
 |---|---|
@@ -25,7 +25,15 @@ forbidden (CI lint).
 | files | `files.scope.read`, `files.scope.write`, `files.scope.tcc` |
 | kb | `kb.present` |
 | net | `net.read` |
+| app (v1.5) | `app.read`, `app.launch` (write - always behind a grant) |
+| ps (v1.5) | `ps.read`, `ps.signal` (write - always behind a grant) |
+| sys (v1.5) | `sys.read` |
+| power (v1.5) | `power.read` |
 | intents (MS3) | `intents.list`, `intents.run` |
+
+The six v1.5 names are frozen together with the subsystem registry (`omnibus-architecture.md` §7.1);
+`power.read` reports honestly - on a machine without UPower/battery the `power.status` tool is
+hidden and the capability document explains why.
 
 ## Detection Levels
 
@@ -94,8 +102,8 @@ although its tier promises full reading);
 
 ## Source Docs
 
-- `docs/development/omnibus-architecture.md` §7.1-§7.3, §7.5.
-- `docs/development/omnibus-roadmap.md` tasks 1.2.3, 1.3.5, 1.4.2.
+- `docs/development/omnibus-architecture.md` §7.1-§7.3, §7.5 (v1.5 capability names in §7.1).
+- `docs/development/omnibus-roadmap.md` tasks 1.2.3, 1.3.5, 1.4.2, 2.7.1, 2.8.1.
 
 ## Related Specs
 

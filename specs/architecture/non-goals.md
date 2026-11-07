@@ -33,6 +33,11 @@ conditions.
 | `[limits]` config overrides | the first real request; defaults are code-fixed until then |
 | TTFM telemetry | none - replaced by the onboarding autotest; north-star metrics run without telemetry (survey + issue tracking) |
 | Tool-schema deprecation mechanics/window | the first release that needs it |
+| MPRIS / audio-media control (D4) | out of v1.5 - typed `invoke` on a player's UI (a11y addressing) covers the recurring scenarios; the first proven scenario needing more MPRIS semantics than a11y addressing |
+| Window management: focus, layout, workspaces, tiling (D5) | out of v1.5 - Linux has no unified protocol (X11/EWMH vs heterogeneous Wayland mechanisms; macOS private APIs); a window-management protocol standardized in xdg-desktop-portal, or a first scenario a11y addressing cannot serve |
+| Notification reading / history (D6) | out of v1.5 - the portals' notify surface is write-only with no read API; a read API for notifications appearing in xdg-desktop-portal (notification history is never promised before that) |
+| Power/session write actions: suspend/reboot/logout, session switch (D7) | out of v1.5 - terminal system states are never delegated from the general write scope (reading exists: `power.status`); only as a separate grant type with its own audit under sustained demand - never in the general write list |
+| Dedicated OS-settings subsystem (dconf/gsettings bridge) (D8) | the settings-via-a11y position holds - settings change through typed writes in the settings UI (`desktop.set_value`) or config edits inside file scopes; a proven recurring scenario needing structured settings semantics - then a separate subsystem behind its own trait (ADR-011), never a special mode of existing tools |
 
 ## Invariants
 
@@ -49,7 +54,7 @@ conditions.
 
 - `docs/development/omnibus-spec.md` §7.
 - `docs/development/omnibus-architecture.md` §7.4.
-- `docs/development/omnibus-roadmap.md` §4.4, rule R6 (§0.2).
+- `docs/development/omnibus-roadmap.md` §5.4, rule R6 (§0.2).
 
 ## Related Specs
 

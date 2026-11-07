@@ -77,7 +77,7 @@ physically cannot be called before `register`. The order of tool calls inside a 
 ## Source Docs
 
 - `docs/development/omnibus-architecture.md` §3.1, §3.2, §3.9, §3.10, §7.2.
-- `docs/development/omnibus-roadmap.md` tasks 1.3.1, 1.3.2, un-plan §4.4.
+- `docs/development/omnibus-roadmap.md` tasks 1.3.1, 1.3.2, un-plan §5.4.
 
 ## Related Specs
 

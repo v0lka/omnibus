@@ -4,6 +4,9 @@
 
 Nine desktop targets in v1, grouped into three promise tiers. The tier is what Omnibus guarantees and
 tests; the machine truth is always `capabilities()`. Source: `omnibus-architecture.md` §6.
+v1.5 (MS2.5) extends the same eight Linux platforms with app launch, process telemetry, and the
+flatpak/snap inventory; macOS stays outside v1.5 (the subsystems arrive there with their own adapters
+as demand warrants).
 
 ## Matrix
 
@@ -44,6 +47,18 @@ Fedora adds transactional undo and the freshest portal interfaces.
 - Wayland: portal interfaces per `xdg-desktop-portal` version; X11 paths have no floor.
 - varlink is outside T2 guarantees (only with fresh systemd); the main path is D-Bus.
 
+### v1.5 subsystem floors (Linux only)
+
+- `app.launch` runs through `systemd-run --user`, which ships with systemd itself: the existing
+  systemd >= 252 floor covers every target Linux platform - no separate floor (roadmap task 2.7.2).
+- `app.open` needs `xdg-open`: presence-based, no version floor; a stand without the binary hides the
+  tool per the ladder, with the reason in `capabilities()`.
+- `power.status` needs UPower (D-Bus) and a battery: presence-based ("when present"), probe-detected;
+  no UPower/battery means the tool is hidden, never an error in the log.
+- flatpak/snap inventory has no version floor; snap belongs to the default install only on Ubuntu
+  among the targets, flatpak is install-dependent everywhere. An absent source is plain absence from
+  the `pkg_list` output - an honest omission, never a degradation (R7).
+
 ## CI Session Axes
 
 - Container CI runs the session-kind axis only (X11 and Wayland on Arch
@@ -71,7 +86,7 @@ Fedora adds transactional undo and the freshest portal interfaces.
 
 - `docs/development/omnibus-spec.md` §2 (platform list, floors).
 - `docs/development/omnibus-architecture.md` §6 (matrix, definitions, floors).
-- `docs/development/omnibus-roadmap.md` tasks 1.1.1, 2.1.2, 2.6.2.
+- `docs/development/omnibus-roadmap.md` tasks 1.1.1, 2.1.2, 2.6.2, 2.7.2, 2.8.2, 2.9.1 (v1.5 floors and coverage).
 
 ## Related Specs
 

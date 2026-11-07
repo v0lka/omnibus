@@ -51,10 +51,15 @@
 │   journaling:  journald               / unifiedlog                │
 │   service:     systemd1               / launchd                   │
 │   packages:    alpm / apt / dnf       / brew(+mas)                │
+│                + flatpak/snap — read-only инвентарь, v1.5         │
 │   portals:     xdg-portals+wl-clip    / screencapture+notify      │
 │   files:       fs-xdg                 / fs-tcc                    │
 │   knowledge:   kb-archwiki · kb-guides / kb-guides (Apple, SS64)  │
 │   сеть:        nm (read-only)         / — (вне v1)                │
+│   запуск:      launch (systemd-run    / — (вне v1.5)              │
+│                --user, xdg-open)                                  │
+│   процессы:    proc (/proc, sysfs,    / — (вне v1.5)              │
+│                upower)                                            │
 │   probe:       детекция платформы, выбор и активация адаптеров    │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -129,13 +134,17 @@ adapters ↮ adapters (запрещено)        adapters ↮ core::internal (�
 | 1 | **a11y / desktop** | `DesktopA11y` | `tree(app)`, `element(id)`, `read_attr`, `set_value`, `invoke` | `atspi` (AT-SPI2 over D-Bus) | `ax` (NSAccessibility / AXUIElement) |
 | 2 | **journaling + audit sink** | `Journal`, `AuditSink` | `query(Filter{unit, boot, severity, window})`, `tail`, `write(AuditEvent)` | `journald` (персистентность зависит от дистрибутива — §6/§7) | `unifiedlog` (`log show --predicate`) |
 | 3 | **service management** | `ServiceManager` | `list`, `status`, `start/stop/restart`, `enable/disable` | `systemd1` (org.freedesktop.systemd1) | `launchd` (LaunchAgent — только агенты видят GUI) |
-| 4 | **package management** | `PackageManager` | `list`, `info`, `search`, `install`, `remove`, `history`, `undo` | `alpm` (Arch/Manjaro) · `apt` (Debian/Ubuntu/Mint; **undo нет**) · `dnf` (Fedora; transactional undo) | `brew` (формулы) + `mas` (App Store, опц.) |
+| 4 | **package management** | `PackageManager` | `list`, `info`, `search`, `install`, `remove`, `history`, `undo` | `alpm` (Arch/Manjaro) · `apt` (Debian/Ubuntu/Mint; **undo нет**) · `dnf` (Fedora; transactional undo) · `flatpak`/`snap` *(v1.5)* (read-only инвентарь: реализуют только `list`/`info`, write-операции не объявляют) | `brew` (формулы) + `mas` (App Store, опц.) |
 | 5 | **portals** | `ScreenCapture`, `Notify` | `screenshot`, `clip_read/clip_write`, `notify` | `xdg-desktop-portal` + `wl-clipboard`/`xclip` | ScreenCaptureKit (+ежемесячный re-grant права в 15+) · UNUserNotificationCenter |
 | 6 | **файловые скоупы** | `FileScope` | `list/read/write` в granted-скоупах, `resolve` | `fs-xdg` (XDG-каталоги) | `fs-tcc` (`~/Documents` и др.; за пределами — Full Disk Access) |
 | 7 | **база знаний** | `KnowledgeBase` | `search`, `page` | `kb-archwiki` (ArchWiki + Manjaro-overlay) · `kb-guides` (дистро-доки: Debian wiki, Ubuntu docs, Mint, Fedora docs) | `kb-guides` (агрегатор гайдов: Apple Support, SS64, сообщество) |
 | 8 | **платформенный probe** | `PlatformProbe` | `detect() → PlatformReport{distro/release, versions, живость демонов}` | `/etc/os-release`, `systemctl --version`, состояние шин | `sw_vers`, системные профили, TCC-гранты |
 | 9 | *(опц., macOS)* **app-intents backend** | `AppIntentsBridge` | `list_actions`, `run` | — | Shortcuts / App Intents (только cooperating-приложения; **бэкенд, не замена** a11y-слоя) |
 | 10 | **сеть (статус)** | `NetworkStatus` | `status()` — устройства, connectivity, wifi-сети; read-only | `nm` (org.freedesktop.NetworkManager; «когда есть» — §6) | — (вне v1) |
+| 11 | *(v1.5, Linux)* **запуск приложений** | `AppLauncher` | `list`, `launch(AppSpec)`, `open(uri\|path)` | `launch` (инвентарь `.desktop` + `systemd-run --user` + `xdg-open`) | — (вне v1.5) |
+| 12 | *(v1.5, Linux)* **процессы и телеметрия** | `ProcessTelemetry` | `list`, `info(pid)`, `sys_stats`, `power_status`, `signal(pid, sig)` | `proc` (`/proc` + sysfs + UPower; **PID 1 и процессы systemd-юнитов исключены** — сервисы адресуются `svc_*`) | — (вне v1.5) |
+
+**Активация нескольких адаптеров (v1.5):** правило «один активный адаптер на подсистему» (§9) получает единственное документированное исключение: в подсистеме packages read-only адаптер инвентаря flatpak/snap активен одновременно с нативным менеджером — оба провайдера видны в `capabilities()` (агент различает их полем «источник» в DTO), write-семантика — только у нативного.
 
 **Дисциплина DTO:** плоские именованные структуры (никаких кортежей), newtype-обёртки для юнитов (`Milliseconds`, `Bytes`, `Severity`), нативные типы (`zbus::Value`, хэндлы ALPM, `AXUIElementRef`) **не покидают адаптер** — маппинг в DTO выполняется внутри адаптера.
 
@@ -164,11 +173,19 @@ adapters ↮ adapters (запрещено)        adapters ↮ core::internal (�
 | `fs_write` | `files.scope.write` (+ scope) | `FileScope` |
 | `wiki_search` / `wiki_page` | `kb.present` | `KnowledgeBase` |
 | `net_status` | `net.read` | `NetworkStatus` |
+| `app.list` *(v1.5, Linux)* | `app.read` | `AppLauncher` |
+| `app.launch` / `app.open` *(v1.5, Linux)* | `app.launch` (+ write-скоуп) | `AppLauncher` |
+| `ps.list` / `ps.info` *(v1.5, Linux)* | `ps.read` | `ProcessTelemetry` |
+| `sys.stats` *(v1.5, Linux)* | `sys.read` | `ProcessTelemetry` |
+| `power.status` *(v1.5, Linux)* | `power.read`; скрыт без UPower/батареи | `ProcessTelemetry` |
+| `ps.signal` *(v1.5, Linux)* | `ps.signal` (+ write-скоуп); PID 1 и systemd-юниты исключены (`Unsupported` с подсказкой `svc_*`) | `ProcessTelemetry` |
 | `intent_list` / `intent_run` *(MS3, macOS)* | `intents.list` / `intents.run` (+ write-скоуп для `run`); скрыты без actions в probe-отчёте | `AppIntentsBridge` |
 | `capabilities()` / `session_info` | — (ядро) | агрегат `PlatformProbe` |
 | `doctor` (ядро; оркеструет 4 трейта) | — (ядро) | `PlatformProbe` + `Journal` + `ServiceManager` + `KnowledgeBase` |
 
 **Правило:** инструмент живёт в ядре, даже если у него единственный адаптер-бэкенд; ядро вызывает трейт, а не реализацию. Ни один инструмент не импортирует нативные крейты.
+
+*(v1.5)* `pkg_list` / `pkg_info` агрегируют нативный менеджер и read-only инвентарь flatpak/snap — источник каждого пакета виден в DTO (`native`/`flatpak`/`snap`); write-инструменты для flatpak/snap не объявляются.
 
 ---
 
@@ -212,7 +229,7 @@ adapters ↮ adapters (запрещено)        adapters ↮ core::internal (�
 
 ### 7.1. `capabilities()` — единственный источник истины
 
-- Формат capability: `{domain}.{feature}[.{qualifier}]` + версия (semver) + статус (`present` / `degraded` / `opt-in-required`); для capability с вариантами исполнения — типизированное значение-enum из contracts. Примеры: `desktop.tree`, `desktop.write.typed`, `journal.persistent`, `journal.prev_boot`, `service.write`, `pkg.undo` (значение-enum: `none`/`cache-downgrade`/`transactional`), `portal.screenshot`, `files.scope.tcc`. Пример собранного документа — §3.3.
+- Формат capability: `{domain}.{feature}[.{qualifier}]` + версия (semver) + статус (`present` / `degraded` / `opt-in-required`); для capability с вариантами исполнения — типизированное значение-enum из contracts. Примеры: `desktop.tree`, `desktop.write.typed`, `journal.persistent`, `journal.prev_boot`, `service.write`, `pkg.undo` (значение-enum: `none`/`cache-downgrade`/`transactional`), `portal.screenshot`, `files.scope.tcc`; v1.5 добавляет `app.read`, `app.launch` (write — за грантом), `ps.read`, `ps.signal` (write — за грантом), `sys.read`, `power.read` — имена заморожены вместе с реестром §4. Пример собранного документа — §3.3.
 - Реестр имён — константы в `omnibus-contracts` (один источник; литералы в коде запрещены).
 - Адаптер при старте отчитывается через `PlatformProbe` → реестр → `capabilities()` собирает документ: что доступно, на каком адаптере, с какой версией, с какими ограничениями. Агент **не должен ничего предполагать**: отсутствие capability выражается отсутствием инструмента, а не runtime-ошибкой.
 
@@ -251,8 +268,8 @@ Tier — категория *обещаний и тестирования* (чт
 ### 8.1. Карта компонентов
 
 - **Ядро** (`omnibus-core`): фасад, сессии, скоупы, аудит, capabilities-реестр, doctor (оркестрация трейтов).
-- **Контракты** (`omnibus-contracts`): 12 трейтов SPI (10 подсистем), DTO, реестр capabilities, error taxonomy, типы адресации.
-- **Адаптеры**: ~15 крейтов (подсистема×семейство) + probe.
+- **Контракты** (`omnibus-contracts`): 14 трейтов SPI (12 подсистем), DTO, реестр capabilities, error taxonomy, типы адресации.
+- **Адаптеры**: ~21 крейт (подсистема×семейство) + probe.
 - **Характер связей:** ядро → адаптеры — через `dyn Trait` (реестр, собранный probe'ом); адаптеры → контракты; адаптер↔адаптер — запрещено (P6).
 
 ### 8.2. Сила интеграции на границе
@@ -330,7 +347,7 @@ Tier — категория *обещаний и тестирования* (чт
 
 **Обратный сценарий** (замена провайдера без изменения контракта): dnf → dnf5 — целиком внутри `omnibus-adapter-dnf`; сигнатуры и capabilities не меняются.
 
-**Единственный случай, требующий касания ядра:** новый *тип* подсистемы (новый трейт) — и это аддитивное расширение (новый реестр), не ломающее изменений. В v1 таких два, оба just-in-time: сеть (`NetworkStatus`, Ф2.2.3) и AppIntents (`AppIntentsBridge`, Ф3.6.2) — трейт объявляется в `omnibus-contracts` вместе со своей первой реализацией, а не заранее; далее реестр §4 закрыт по списку задач спеки.
+**Единственный случай, требующий касания ядра:** новый *тип* подсистемы (новый трейт) — и это аддитивное расширение (новый реестр), не ломающее изменений. В v1 таких два, оба just-in-time: сеть (`NetworkStatus`, Ф2.2.3) и AppIntents (`AppIntentsBridge`, Ф3.6.2); в v1.5 — ещё два: запуск приложений (`AppLauncher`, Ф2.7.1) и процессы/телеметрия (`ProcessTelemetry`, Ф2.8.1) — трейт объявляется в `omnibus-contracts` вместе со своей первой реализацией, а не заранее; реестр §4 остаётся закрытым списком задач роадмапа (ADR-011: количество трейтов всегда сверяемо с ним).
 
 ### 8.7. Красные флаги, которых архитектура сознательно избегает
 
@@ -351,7 +368,7 @@ Tier — категория *обещаний и тестирования* (чт
 ## 9. Эволюция и совместимость
 
 - Контракты: semver; минорные версии — аддитивные capabilities; breaking-изменения — только мажорной версией, с миграцией (окно совместимости появится вместе с первым внешним потребителем контрактов).
-- На каждую подсистему **активен один адаптер** (выбирает probe); несколько реализаций допускаются только как fallback — это упрощает модель поведения и аудит.
+- На каждую подсистему **активен один адаптер** (выбирает probe); несколько реализаций допускаются только как fallback — это упрощает модель поведения и аудит. Единственное документированное исключение (v1.5): в подсистеме packages read-only адаптер инвентаря flatpak/snap активен одновременно с нативным менеджером — оба провайдера видны в `capabilities()`, write-семантика — только у нативного.
 - Удаление capability — только мажорной версией; deprecation-механика (`deprecated` → скрыта из дефолтного `capabilities()`) — по первому релизу, которому она реально понадобится.
 
 ## 10. Открытые вопросы (⚠M0)

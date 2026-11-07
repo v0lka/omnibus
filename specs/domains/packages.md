@@ -11,6 +11,7 @@ The packages domain covers listing, inspecting, installing, removing, and - wher
 - `omnibus-adapter-apt/src/` - Debian/Ubuntu/Mint provider (CLI mapping per ADR-002: `dpkg-query`, `apt-cache`, `apt-get`, history from `/var/log/apt/history.log`)
 - `omnibus-adapter-dnf/src/` - Fedora provider (the dnf/dnf5 backend swap is resolved inside the adapter)
 - `omnibus-adapter-brew/src/` (planned) - macOS provider (MS3): formula + cask; `mas` as the optional App Store backend
+- `omnibus-adapter-flatpak/src/` (planned) - v1.5 flatpak/snap inventory provider: one crate for both stores, called through their CLI binaries; handles never leave the adapter
 
 ## Capability and Tools
 
@@ -22,6 +23,9 @@ The packages domain covers listing, inspecting, installing, removing, and - wher
 
 `pkg.undo` carries a typed value from the enum `none` / `cache-downgrade` / `transactional`.
 
+(v1.5) `pkg_list` / `pkg_info` aggregate the native manager and the flatpak/snap inventory; the DTO
+carries an explicit source field for every package: `native` / `flatpak` / `snap`.
+
 ## Behavior
 
 Trait `PackageManager` operations: `list`, `info`, `search`, `install`, `remove`, `history`, `undo`.
@@ -32,6 +36,7 @@ Trait `PackageManager` operations: `list`, `info`, `search`, `install`, `remove`
 | apt | Debian trixie/bookworm/bullseye, Ubuntu LTS, Mint | `none` | the tool honestly does not exist; apt has no transactional rollback |
 | dnf | Fedora (T2) | `transactional` | dnf history undo/rollback to the previous transaction point |
 | brew + mas | macOS (MS3, T2) | expected `none` (per the F3.1 gate) | honest schema degradation instead of a rollback promise |
+| flatpak/snap (v1.5) | Linux, wherever flatpak/snap are installed (snap ships by default only on Ubuntu among the targets) | n/a - read-only inventory | implements only `list`/`info`; no write operations exist for these sources |
 
 - `history` always reads the provider's own transaction log: the pacman log for alpm, `/var/log/apt/history.log` for apt.
 - An undo attempt where `pkg.undo=none` returns `CapabilityRequired` with a hint - never a failure in the middle of a transaction.
@@ -39,6 +44,14 @@ Trait `PackageManager` operations: `list`, `info`, `search`, `install`, `remove`
 - apt transactions always run without interactive input (non-tty CLI flags are pinned by tests).
 - On macOS, formula and cask share one contract (the package type is a DTO field); without `mas`, App Store packages drop out of `search` while everything else keeps working.
 - A provider swap (dnf to dnf5) changes neither trait signatures nor capability constants.
+- (v1.5) The flatpak/snap inventory provider implements only the read part of `PackageManager`
+  (`list`, `info`); `install`/`remove`/`undo` are not declared for these sources - the honest
+  limitation is marked in the schema and in `capabilities()` (roadmap task 2.9.1).
+- (v1.5) The probe activates the native manager and the inventory adapter together - the sole
+  documented exception to the one-active-adapter rule (architecture §9); both providers are visible
+  in `capabilities()`, and write semantics belong to the native manager only.
+- (v1.5) With flatpak/snap absent from the machine, the aggregated `pkg_list`/`pkg_info` output is
+  unchanged and reports no degradation (R7).
 
 ## Degradation
 
@@ -46,6 +59,8 @@ Trait `PackageManager` operations: `list`, `info`, `search`, `install`, `remove`
 - Missing capability: `pkg_undo` is absent from `tools/list` when `pkg.undo=none`; a direct call returns `CapabilityRequired`.
 - Below version floor: no version floor is defined for this subsystem.
 - Grant not issued: `pkg_install`/`pkg_remove`/`pkg_undo` without a write grant return `ScopeDenied` with a copy-paste remedy command.
+- (v1.5) An absent flatpak or snap source is plain absence from the aggregated output - an honest
+  omission, never a degradation state.
 
 ## Invariants
 
@@ -54,6 +69,8 @@ Trait `PackageManager` operations: `list`, `info`, `search`, `install`, `remove`
 - The install/remove schema always marks the missing rollback on machines with `pkg.undo=none`.
 - ALPM handles always stay inside the alpm adapter; only DTOs cross the SPI boundary.
 - Transaction history always comes from the provider's own log.
+- (v1.5) The inventory provider always declares only read operations; the source of every package in
+  `pkg_list` is always explicit in the DTO.
 
 ## Related Specs
 

@@ -12,11 +12,11 @@ the daemon never calls the client, and no other transport or control channel exi
 | `capabilities()` | `omnibus-core` (tool) | agent | machine-readable truth about this machine (P4) |
 | `session_info` | `omnibus-core` (tool) | agent | session identity for audit correlation |
 | `doctor` | `omnibus-core` (tool) | agent | diagnosis + ready commands only (never mutates) |
-| 26 domain tools | `omnibus-core` facade, backed by SPI traits | agent | reads, typed writes, knowledge, network |
+| 34 domain tools | `omnibus-core` facade, backed by SPI traits | agent | reads, typed writes, knowledge, network, app launch, process/system/power state |
 | `tools/list` (hidden-tool rule) | `omnibus-core` facade | agent | tools without capabilities are absent |
 | notifications: none in v1 | - | - | no push, no subscription surface (un-plan) |
 
-The complete 29-tool registry with capability bindings lives in
+The complete 37-tool registry with capability bindings lives in
 [tool-registry.md](../architecture/tool-registry.md); this contract fixes the boundary semantics.
 
 ## Initialization

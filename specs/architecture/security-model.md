@@ -70,7 +70,7 @@ and every action is audited. This spec is the normative restatement of `omnibus-
 
 - `docs/development/omnibus-spec.md` §4, §7 (never-list).
 - `docs/development/omnibus-architecture.md` §3.3, §3.4, §7.4.
-- `docs/development/omnibus-roadmap.md` tasks 1.3.3, 1.7.1, un-plan §4.4.
+- `docs/development/omnibus-roadmap.md` tasks 1.3.3, 1.7.1, un-plan §5.4.
 
 ## Related Specs
 

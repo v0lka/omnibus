@@ -34,4 +34,4 @@ always.
 ## Source Docs
 
 - `docs/development/omnibus-spec.md` sections 2, 7.
-- `docs/development/omnibus-roadmap.md` un-plan section 4.4.
+- `docs/development/omnibus-roadmap.md` un-plan section 5.4.

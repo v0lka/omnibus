@@ -182,9 +182,11 @@ these is rejected in review, by design:
   `specs/architecture/principles.md`.
 - Why the seam is shaped this way: `specs/architecture/coupling-model.md`;
   the seven gates: `specs/architecture/quality-gates.md`.
-- Normative inventory: 12 SPI traits across 10 subsystems
-  (`specs/architecture/spi-registry.md`), 29 MCP tools
-  (`specs/architecture/tool-registry.md`), 20 capability constants
+- Normative inventory: 14 SPI traits across 12 subsystems
+  (`specs/architecture/spi-registry.md`), 37 MCP tools (29 through v1.0;
+  eight more arrive with v1.5, Linux only)
+  (`specs/architecture/tool-registry.md`), 26 capability constants
+  (18 shipped; six arrive with v1.5, the two `intents.*` with MS3)
   (`specs/architecture/capability-model.md`), the 8 error codes
   (`specs/architecture/error-taxonomy.md`).
 - Boundaries: `specs/contracts/core-adapters.md`,

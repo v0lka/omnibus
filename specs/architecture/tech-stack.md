@@ -9,7 +9,8 @@ Choices below are decisions, not suggestions; changing one requires a new ADR.
 
 - Language: Rust. One static binary (`omnibusd`).
 - Workspace crates: `omnibus-contracts`, `omnibus-core`, `omnibus-probe`, `omnibus-adapter-*`
-  (one crate per subsystem x OS family; ~15 adapter crates + probe at full matrix).
+  (one crate per subsystem x OS family; ~21 adapter crates + probe at full matrix - v1.5 adds the
+  launch, proc, and flatpak inventory crates).
 
 ## Core Stack
 
@@ -26,10 +27,12 @@ Choices below are decisions, not suggestions; changing one requires a new ADR.
 | a11y | `atspi` crate (AT-SPI2 over D-Bus) | `objc2` bindings to NSAccessibility / AXUIElement |
 | journal | journald JSON interface | unified log via `log show --predicate` (or private API - ADR-004) |
 | services | `zbus` (org.freedesktop.systemd1) | launchctl + ServiceManagement (13+) |
-| packages | `alpm` crate (Arch/Manjaro); apt via libapt or CLI mapping (ADR-002); dnf/dnf5 | `brew` (+ `mas` optional) |
+| packages | `alpm` crate (Arch/Manjaro); apt via libapt or CLI mapping (ADR-002); dnf/dnf5; flatpak/snap read-only inventory via their CLIs (v1.5) | `brew` (+ `mas` optional) |
 | portals | xdg-desktop-portal + wl-clipboard/xclip | ScreenCaptureKit; UNUserNotificationCenter; NSPasteboard |
 | files | XDG directories | TCC-granted folders (fs-tcc) |
 | network | `zbus` (org.freedesktop.NetworkManager), read-only | none (out of v1) |
+| app launch (v1.5) | `.desktop` inventory + `systemd-run --user` + `xdg-open` | none (out of v1.5) |
+| process telemetry (v1.5) | `/proc` + sysfs + UPower over D-Bus | none (out of v1.5) |
 | intents | none | Shortcuts / App Intents bridge (optional backend, MS3) |
 | probe | `/etc/os-release`, `systemctl --version`, bus liveness | `sw_vers`, system profiler, TCC state |
 

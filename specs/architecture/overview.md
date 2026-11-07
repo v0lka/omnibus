@@ -4,8 +4,9 @@
 
 Omnibus is an agent contract for the operating system: one semantic API over swappable OS adapters,
 exported as MCP. The daemon `omnibusd` gives AI agents a uniform, auditable, least-privilege way to read
-and drive a desktop OS (services, packages, logs, UI, files, clipboard, screenshots, notifications,
-knowledge bases, network status). This page is the entry point; details live in the specs linked from
+and a desktop OS (services, packages, logs, UI, files, clipboard, screenshots, notifications,
+knowledge bases, network status; v1.5 adds app launch and live process/system/power state). This
+page is the entry point; details live in the specs linked from
 [INDEX.md](../INDEX.md).
 
 Scope: desktop implementations of target OSes only. Server/headless profiles are out of scope for v1.
@@ -30,10 +31,13 @@ MCP hosts: Claude Code / goose / Cursor / any MCP client
 |   journal:   journald                / unifiedlog                      |
 |   services:  systemd1                / launchd                         |
 |   packages:  alpm / apt / dnf        / brew (+mas)                     |
+|             + flatpak/snap (read-only inventory, v1.5)                 |
 |   portals:   xdg-portals + wl-clipboard / screencapture + notify       |
 |   files:     fs-xdg                  / fs-tcc (TCC grants)             |
 |   knowledge: kb-archwiki, kb-guides / kb-guides (Apple, SS64)          |
 |   network:   nm (read-only)          / none (out of v1)                |
+|   launch:    systemd-run+xdg-open    / none (out of v1.5)              |
+|   processes: /proc+sysfs+upower      / none (out of v1.5)              |
 |   intents:   none                    / appintents (optional backend)   |
 |   probe:     platform detection, adapter selection, floors           |
 +------------------------------------------------------------------------+
@@ -41,9 +45,11 @@ MCP hosts: Claude Code / goose / Cursor / any MCP client
 
 ## The Numbers (normative inventory)
 
-- 12 SPI traits across 10 subsystems (11 declared; `AppIntentsBridge` is JIT with MS3 — see [spi-registry.md](spi-registry.md)).
-- 29 MCP tools (see [tool-registry.md](tool-registry.md)).
-- 20 capability constants (18 shipped; the two `intents.*` arrive with MS3 — see [capability-model.md](capability-model.md)).
+- 14 SPI traits across 12 subsystems (11 declared; `AppLauncher` and `ProcessTelemetry` are JIT
+  with v1.5, `AppIntentsBridge` with MS3 — see [spi-registry.md](spi-registry.md)).
+- 37 MCP tools (29 through v1.0; eight arrive with v1.5, Linux only — see [tool-registry.md](tool-registry.md)).
+- 26 capability constants (18 shipped; six arrive with v1.5, the two `intents.*` with MS3 — see
+  [capability-model.md](capability-model.md)).
 - 8 error codes (see [error-taxonomy.md](error-taxonomy.md)).
 - 3 support tiers, 9 target desktop platforms (see [platform-matrix.md](platform-matrix.md)).
 - 0 model calls, 0 in-band confirmations, 0 consent UI in `omnibusd` (see [security-model.md](security-model.md)).

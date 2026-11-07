@@ -2,7 +2,8 @@
 
 ## Context
 
-The complete normative list of 29 MCP tools. Names and capability bindings are fixed here and mirror
+The complete normative list of 37 MCP tools (29 through v1.0; eight more arrive with v1.5, Linux
+only). Names and capability bindings are fixed here and mirror
 `omnibus-architecture.md` §5 and `omnibus-spec.md` §4. `[+scope]` means a write grant from the TOML
 manifest is required in addition to the capability. Core tools are marked (core).
 
@@ -28,10 +29,20 @@ manifest is required in addition to the capability. Core tools are marked (core)
 | `fs_list` / `fs_read` | `files.scope.read` | `FileScope` |
 | `fs_write` [+scope] | `files.scope.write` | `FileScope` |
 | `wiki_search` / `wiki_page` | `kb.present` | `KnowledgeBase` |
+| `app.list` (v1.5, Linux) | `app.read` | `AppLauncher` |
+| `app.launch` / `app.open` [+scope `app.launch`] (v1.5, Linux) | `app.launch` (+ write grant) | `AppLauncher` |
+| `ps.list` / `ps.info` (v1.5, Linux) | `ps.read` | `ProcessTelemetry` |
+| `sys.stats` (v1.5, Linux) | `sys.read` | `ProcessTelemetry` |
+| `power.status` (v1.5, Linux) | `power.read`; hidden without UPower/battery | `ProcessTelemetry` |
+| `ps.signal` [+scope `ps.signal`] (v1.5, Linux) | `ps.signal` (+ write grant); PID 1 and systemd-unit processes excluded (`Unsupported` with a `svc_*` hint) | `ProcessTelemetry` |
 | `intent_list` / `intent_run` [+scope `intents.run`] (MS3, macOS) | `intents.list` / `intents.run`; hidden without actions in probe report | `AppIntentsBridge` |
 | `capabilities()` (core) | none | `PlatformProbe` aggregate |
 | `session_info` (core) | none | core |
 | `doctor` (core; composes subsystem facts) | none | probe/caps/registry state + audit-sink and write-gate health |
+
+(v1.5) `pkg_list` / `pkg_info` aggregate the native manager and the read-only flatpak/snap
+inventory; the source of every package is explicit in the DTO (`native` / `flatpak` / `snap`). Write
+tools for flatpak/snap sources are not declared.
 
 ## Hiding Rule
 
@@ -57,6 +68,7 @@ limitation marked in the schema (example: `pkg_install` without `pkg.undo` on ap
 
 - `docs/development/omnibus-spec.md` §4 (tool surface).
 - `docs/development/omnibus-architecture.md` §5 (binding table), §7.3 (hiding rule).
+- `docs/development/omnibus-roadmap.md` tasks 2.7.1-2.9.2 (v1.5 tool additions).
 
 ## Related Specs
 

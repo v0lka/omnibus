@@ -14,6 +14,7 @@ Navigation entry point. For formats and rules see [META.md](META.md); for day-to
 | Check what a concrete machine supports | [capability-model](architecture/capability-model.md) |
 | Add or change a capability | [capability-model](architecture/capability-model.md), [config and grants](contracts/config-and-grants.md) |
 | Implement a subsystem adapter | [spi-registry](architecture/spi-registry.md), [core <-> adapters](contracts/core-adapters.md), the domain spec |
+| Launch apps, observe processes/system/power (v1.5) | [app-launch](domains/app-launch.md), [process-telemetry](domains/process-telemetry.md) |
 | Understand grants, scopes, consent rules | [security-model](architecture/security-model.md), [config and grants](contracts/config-and-grants.md), [ADR-006](decisions/006-consent-out-of-agent-band.md), [ADR-010](decisions/010-single-grant-mechanism.md) |
 | Understand the audit event format | [audit](domains/audit.md) |
 | Interpret a typed error | [error-taxonomy](architecture/error-taxonomy.md) and the tool's domain spec |
@@ -65,13 +66,14 @@ Every file under `specs/`:
 - [architecture/quality-gates.md](architecture/quality-gates.md) - the seven rules, CI security tests
 - [architecture/risks-and-mitigations.md](architecture/risks-and-mitigations.md) - risk register, M0 gates
 - [architecture/security-model.md](architecture/security-model.md) - grants, consent, trust
-- [architecture/spi-registry.md](architecture/spi-registry.md) - 12 traits / 10 subsystems
+- [architecture/spi-registry.md](architecture/spi-registry.md) - 14 traits / 12 subsystems
 - [architecture/tech-stack.md](architecture/tech-stack.md) - Rust stack, packaging
-- [architecture/tool-registry.md](architecture/tool-registry.md) - the 29 MCP tools
+- [architecture/tool-registry.md](architecture/tool-registry.md) - the 37 MCP tools
 - [architecture/topology-and-lifecycle.md](architecture/topology-and-lifecycle.md) - stdio topology, sessions, limits
 
 `domains/`:
 
+- [domains/app-launch.md](domains/app-launch.md) - app.list / app.launch / app.open (v1.5)
 - [domains/audit.md](domains/audit.md) - audit event schema, AuditSink
 - [domains/clipboard.md](domains/clipboard.md) - clip_read / clip_write
 - [domains/desktop-a11y.md](domains/desktop-a11y.md) - desktop tree, element, typed writes
@@ -81,7 +83,8 @@ Every file under `specs/`:
 - [domains/knowledge.md](domains/knowledge.md) - wiki adapters, caching
 - [domains/network.md](domains/network.md) - net_status (read-only)
 - [domains/notifications.md](domains/notifications.md) - notify
-- [domains/packages.md](domains/packages.md) - package tools, undo semantics
+- [domains/packages.md](domains/packages.md) - package tools, undo semantics, flatpak/snap inventory (v1.5)
+- [domains/process-telemetry.md](domains/process-telemetry.md) - ps.list / ps.info / sys.stats / power.status / ps.signal (v1.5)
 - [domains/screen-capture.md](domains/screen-capture.md) - screenshot, accepted read risk
 - [domains/services.md](domains/services.md) - service tools
 

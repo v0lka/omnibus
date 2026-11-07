@@ -19,10 +19,14 @@ How contracts, capabilities, and the adapter set evolve without breaking agents 
 ## Adapter Set Evolution
 
 - Exactly one active adapter per subsystem, selected by the probe; extra implementations may exist
-  only as fallbacks. This keeps behavior and audit explainable.
+  only as fallbacks. This keeps behavior and audit explainable. Sole documented exception (v1.5):
+  in the packages subsystem the read-only flatpak/snap inventory adapter is active alongside the
+  native manager - both providers visible in `capabilities()`, write semantics on the native manager
+  only.
 - New traits are declared just-in-time together with their first implementation; the trait registry
   is closed over the roadmap task list. In v1 exactly two late traits: `NetworkStatus` (task 2.2.3)
-  and `AppIntentsBridge` (task 3.6.2).
+  and `AppIntentsBridge` (task 3.6.2); v1.5 adds `AppLauncher` (task 2.7.1) and `ProcessTelemetry`
+  (task 2.8.1).
 - Adding an adapter never changes the core (see [coupling-model.md](coupling-model.md)).
 - `omnibus-contracts` moves to its own repository when the first external adapter contributor
   appears - a trigger-based decision, not a calendar one.
@@ -49,7 +53,7 @@ The un-plan items (see [non-goals.md](non-goals.md)) each carry their own revisi
 ## Source Docs
 
 - `docs/development/omnibus-architecture.md` §9, §8.8.3.
-- `docs/development/omnibus-roadmap.md` §1 (just-in-time traits), §4.4 (un-plan).
+- `docs/development/omnibus-roadmap.md` §1 (just-in-time traits), §5.4 (un-plan).
 
 ## Related Specs
 

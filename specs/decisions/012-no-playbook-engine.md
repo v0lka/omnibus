@@ -34,4 +34,4 @@ real content pipeline and contributors exist.
 ## Source Docs
 
 - `docs/development/omnibus-architecture.md` section 4 (knowledge base row).
-- `docs/development/omnibus-roadmap.md` tasks 2.5.2, 3.6.1, un-plan section 4.4.
+- `docs/development/omnibus-roadmap.md` tasks 2.5.2, 3.6.1, un-plan section 5.4.

@@ -9,7 +9,7 @@ core calls traits through a probe-assembled registry and never links adapter cra
 
 | Interface | Crate | Consumed By | Purpose |
 | --------- | ----- | ----------- | ------- |
-| 12 SPI traits (10 subsystems) | `omnibus-contracts` | `omnibus-core` tools | the full subsystem registry - see [spi-registry.md](../architecture/spi-registry.md) |
+| 14 SPI traits (12 subsystems) | `omnibus-contracts` | `omnibus-core` tools | the full subsystem registry - see [spi-registry.md](../architecture/spi-registry.md) |
 | DTOs (flat named structs, newtype units) | `omnibus-contracts` | core + adapters | the only data shapes crossing the seam |
 | capability constants | `omnibus-contracts` | core + adapters | name literals are forbidden outside this crate (CI lint) |
 | error taxonomy (8 codes) | `omnibus-contracts` | core + adapters | every trait method returns a contract error |
@@ -21,7 +21,9 @@ core calls traits through a probe-assembled registry and never links adapter cra
 - Startup order is the adapter FSM owned by the core: `probe -> register -> serve -> shutdown`; an
   adapter physically cannot be called before `register`.
 - The probe selects exactly one active adapter per subsystem; extra implementations may exist only
-  as fallbacks.
+  as fallbacks. Sole documented exception (v1.5): the packages subsystem runs the read-only
+  flatpak/snap inventory adapter alongside the native manager
+  (see [spi-registry.md](../architecture/spi-registry.md)).
 - Linking happens in the composition root (the binary target); `omnibus-core` compiles against
   fakes, never against real adapters.
 - doctor is a core tool that orchestrates several traits (`PlatformProbe` + `Journal` +

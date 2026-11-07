@@ -2,7 +2,7 @@
 
 ## Context
 
-Every risk below is stated in the source docs (`omnibus-spec.md` §6, `omnibus-roadmap.md` §4.2) with
+Every risk below is stated in the source docs (`omnibus-spec.md` §6, `omnibus-roadmap.md` §5.2) with
 its mitigation already built into the plan. This spec is the normative restatement: what can hurt the
 project, which task or design element closes it, and which risks are accepted rather than mitigated.
 The five ⚠M0 open questions (`omnibus-architecture.md` §10) are handled here as verification gates,
@@ -53,7 +53,7 @@ machine state through `capabilities()` (see [capability-model.md](capability-mod
 ## Source Docs
 
 - `docs/development/omnibus-spec.md` §6 (risks).
-- `docs/development/omnibus-roadmap.md` §4.2 (per-milestone risk table).
+- `docs/development/omnibus-roadmap.md` §5.2 (per-milestone risk table).
 - `docs/development/omnibus-architecture.md` §10 (open questions).
 
 ## Related Specs
