@@ -1,0 +1,20 @@
+[package]
+name = "omnibus-adapter-launch"
+version.workspace = true
+edition.workspace = true
+description = "App-launch adapter: .desktop inventory, systemd-run --user launch, xdg-open."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
+omnibus-contracts = { path = "../omnibus-contracts" }
+async-trait = "0.1"
+# Bounded subprocess execution (systemd-run, xdg-open) and the launch budget.
+# No shell anywhere: every child is a direct execve with an argument list.
+tokio = { version = "1", features = ["process", "time", "io-util"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tempfile = "3"

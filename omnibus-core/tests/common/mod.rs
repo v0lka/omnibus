@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use omnibus_contracts::capabilities as cap;
 use omnibus_contracts::dto::audit::AuditActor;
 use omnibus_contracts::dto::desktop::{
     A11yElement, A11yNode, A11yTree, InvokeRequest, SetValueRequest, TreeSelector, WriteOutcome,
@@ -294,6 +295,7 @@ impl PackageManager for FakePackages {
             version: String::from("1.0"),
             description: None,
             repo: None,
+            source: omnibus_contracts::dto::packages::PackageSource::Native,
         }])
     }
 
@@ -557,4 +559,488 @@ impl FileScope for FakeFiles {
             write_allowed: true,
         })
     }
+}
+
+/// App-launcher fake: `list` returns one entry; `launch` counts calls and
+/// echoes the `app_id` in the transient-unit name (the observation join key);
+/// `open` counts calls. The received `AppSpec.args` of the last launch are
+/// kept verbatim so the tests can assert the typed list crossed the seam
+/// unmodified. The facts mirror the real adapter's report (including the R3
+/// note naming a hidden `app.open` when the opener is absent).
+pub struct FakeAppLauncher {
+    pub facts: Vec<CapabilityFact>,
+    pub launch_calls: AtomicUsize,
+    pub open_calls: AtomicUsize,
+    pub last_launch_args: std::sync::Mutex<Vec<String>>,
+}
+
+impl FakeAppLauncher {
+    pub fn new(facts: Vec<CapabilityFact>) -> Arc<Self> {
+        Arc::new(Self {
+            facts,
+            launch_calls: AtomicUsize::new(0),
+            open_calls: AtomicUsize::new(0),
+            last_launch_args: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The last launch's argument list, verbatim.
+    pub fn last_launch_args(&self) -> Vec<String> {
+        self.last_launch_args.lock().expect("args lock").clone()
+    }
+}
+
+#[async_trait]
+impl omnibus_contracts::spi::app_launcher::AppLauncher for FakeAppLauncher {
+    fn report(&self) -> AdapterReport {
+        report("fake-launch", "app-launch", self.facts.clone())
+    }
+
+    async fn list(
+        &self,
+    ) -> Result<Vec<omnibus_contracts::dto::app_launcher::AppEntry>, ContractError> {
+        Ok(vec![omnibus_contracts::dto::app_launcher::AppEntry {
+            app_id: String::from("demo.desktop"),
+            name: String::from("Demo Application"),
+            exec: String::from("/usr/bin/demo"),
+            icon: None,
+            no_display: false,
+        }])
+    }
+
+    async fn launch(
+        &self,
+        spec: omnibus_contracts::dto::app_launcher::AppSpec,
+    ) -> Result<omnibus_contracts::dto::app_launcher::LaunchOutcome, ContractError> {
+        self.launch_calls.fetch_add(1, Ordering::SeqCst);
+        *self.last_launch_args.lock().expect("args lock") = spec.args.clone();
+        Ok(omnibus_contracts::dto::app_launcher::LaunchOutcome {
+            unit_name: format!("app-{}-0000000000000000.service", spec.app_id),
+        })
+    }
+
+    async fn open(
+        &self,
+        _request: omnibus_contracts::dto::app_launcher::OpenRequest,
+    ) -> Result<(), ContractError> {
+        self.open_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// Process-telemetry fake (roadmap 2.8.2/2.8.3): the reads return one honest
+/// process and one sys-stats document; `signal` counts calls and succeeds —
+/// the core's grant gate is the surface under test, so the fake stays on the
+/// happy path beyond it. The facts mirror the real adapter's report shape
+/// (ps.read / sys.read / ps.signal always, power.read only when the stand
+/// has UPower + a battery).
+pub struct FakeProcessTelemetry {
+    pub facts: Vec<CapabilityFact>,
+    pub signal_calls: AtomicUsize,
+    pub last_signalled_pid: std::sync::Mutex<Option<u32>>,
+}
+
+impl FakeProcessTelemetry {
+    pub fn new(facts: Vec<CapabilityFact>) -> Arc<Self> {
+        Arc::new(Self {
+            facts,
+            signal_calls: AtomicUsize::new(0),
+            last_signalled_pid: std::sync::Mutex::new(None),
+        })
+    }
+
+    pub fn signal_calls(&self) -> usize {
+        self.signal_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl omnibus_contracts::spi::process_telemetry::ProcessTelemetry for FakeProcessTelemetry {
+    fn report(&self) -> AdapterReport {
+        report("fake-proc", "process-telemetry", self.facts.clone())
+    }
+
+    async fn list(
+        &self,
+        _query: omnibus_contracts::dto::process_telemetry::ProcessListQuery,
+    ) -> Result<Vec<omnibus_contracts::dto::process_telemetry::ProcessEntry>, ContractError> {
+        use omnibus_contracts::dto::{Bytes, Percent};
+        Ok(vec![
+            omnibus_contracts::dto::process_telemetry::ProcessEntry {
+                pid: 4321,
+                name: String::from("demo-proc"),
+                state: String::from("S"),
+                cpu_percent: Percent(1),
+                rss_bytes: Bytes(4096),
+                cgroup: Some(String::from(
+                    "/user.slice/user-1000.slice/user@1000.service/session-1.scope",
+                )),
+            },
+        ])
+    }
+
+    async fn info(
+        &self,
+        pid: u32,
+    ) -> Result<omnibus_contracts::dto::process_telemetry::ProcessSnapshot, ContractError> {
+        use omnibus_contracts::dto::{Bytes, Milliseconds, Percent};
+        if pid == 4321 {
+            return Ok(omnibus_contracts::dto::process_telemetry::ProcessSnapshot {
+                pid,
+                name: String::from("demo-proc"),
+                state: String::from("S"),
+                cpu_percent: Percent(1),
+                rss_bytes: Bytes(4096),
+                cgroup: None,
+                command_line: Some(String::from("demo-proc --idle")),
+                start_time_epoch_ms: Milliseconds(1_700_000_000_000),
+            });
+        }
+        Err(ContractError::NativeFailure {
+            code: 1,
+            payload: String::from("no-such-process"),
+        })
+    }
+
+    async fn sys_stats(
+        &self,
+    ) -> Result<omnibus_contracts::dto::process_telemetry::SysStats, ContractError> {
+        use omnibus_contracts::dto::{Bytes, Percent, Seconds};
+        Ok(omnibus_contracts::dto::process_telemetry::SysStats {
+            cpu_percent: Percent(12),
+            load_avg_1m: 0.42,
+            load_avg_5m: 0.4,
+            load_avg_15m: 0.36,
+            mem_total_bytes: Bytes(8_000_000_000),
+            mem_used_bytes: Bytes(4_000_000_000),
+            swap_total_bytes: Bytes(2_000_000_000),
+            swap_used_bytes: Bytes(0),
+            uptime_seconds: Seconds(1_000),
+        })
+    }
+
+    async fn power_status(
+        &self,
+    ) -> Result<omnibus_contracts::dto::process_telemetry::PowerStatus, ContractError> {
+        // Present only when the stand's facts carry power.read — the same
+        // honesty the real adapter applies.
+        if self.facts.iter().any(|f| f.name == cap::POWER_READ) {
+            Ok(omnibus_contracts::dto::process_telemetry::PowerStatus {
+                on_battery: false,
+                battery_percent: Some(omnibus_contracts::dto::Percent(88)),
+                seconds_until_empty: None,
+                seconds_until_full: Some(omnibus_contracts::dto::Seconds(1_800)),
+            })
+        } else {
+            Err(ContractError::CapabilityRequired)
+        }
+    }
+
+    async fn signal(
+        &self,
+        request: omnibus_contracts::dto::process_telemetry::SignalRequest,
+    ) -> Result<(), ContractError> {
+        self.signal_calls.fetch_add(1, Ordering::SeqCst);
+        *self.last_signalled_pid.lock().expect("pid lock") = Some(request.pid);
+        Ok(())
+    }
+}
+
+// --- Packages-aggregation fakes (v1.5, roadmap 2.9.1) -----------------------
+
+/// The native manager fake in the two aggregate fixture shapes (the roadmap's
+/// "alpm+flatpak" and "apt+flatpak" stands): list/info/search/history answer
+/// from a fixed table; writes count calls (the write-routing assertion) and
+/// `install`/`remove` succeed; `undo` is honest per shape — alpm answers the
+/// package error, apt the no-undo ladder refusal. A name outside the table is
+/// the honest `pkg-not-found` failure, the fall-through trigger of the
+/// aggregated `pkg_info`.
+pub struct FakeNativePackages {
+    adapter: String,
+    undo_expected: bool,
+    packages: Vec<PackageBrief>,
+    pub install_calls: AtomicUsize,
+    pub remove_calls: AtomicUsize,
+    pub undo_calls: AtomicUsize,
+}
+
+impl FakeNativePackages {
+    /// The alpm aggregate shape: `pkg.undo = cache-downgrade`.
+    pub fn alpm_shape(entries: &[(&str, &str)]) -> Arc<Self> {
+        Arc::new(Self::new("alpm", true, entries))
+    }
+
+    /// The apt aggregate shape: `pkg.undo = none` (the ladder hides the tool).
+    pub fn apt_shape(entries: &[(&str, &str)]) -> Arc<Self> {
+        Arc::new(Self::new("apt", false, entries))
+    }
+
+    fn new(adapter: &str, undo_expected: bool, entries: &[(&str, &str)]) -> Self {
+        Self {
+            adapter: String::from(adapter),
+            undo_expected,
+            packages: entries
+                .iter()
+                .map(|(name, version)| PackageBrief {
+                    name: (*name).to_string(),
+                    version: (*version).to_string(),
+                    description: Some(format!("native package {name}")),
+                    repo: None,
+                    source: omnibus_contracts::dto::packages::PackageSource::Native,
+                })
+                .collect(),
+            install_calls: AtomicUsize::new(0),
+            remove_calls: AtomicUsize::new(0),
+            undo_calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn brief_of(&self, name: &str) -> Option<&PackageBrief> {
+        self.packages.iter().find(|p| p.name == name)
+    }
+}
+
+#[async_trait]
+impl PackageManager for FakeNativePackages {
+    fn report(&self) -> AdapterReport {
+        let undo_fact = if self.undo_expected {
+            common_undo_fact(
+                "present",
+                Some(omnibus_contracts::capabilities::PkgUndoValue::CacheDowngrade.to_json()),
+            )
+        } else {
+            // The honest no-undo shape: an unrecognized ladder status, so the
+            // core hides pkg_undo (the apt adapter's convention).
+            common_undo_fact(
+                "none",
+                Some(omnibus_contracts::capabilities::PkgUndoValue::None.to_json()),
+            )
+        };
+        report(
+            &self.adapter,
+            "packages",
+            vec![
+                fact(cap::PKG_READ, "present"),
+                fact(cap::PKG_WRITE, "present"),
+                undo_fact,
+            ],
+        )
+    }
+
+    async fn list(&self, _request: PackageListRequest) -> Result<Vec<PackageBrief>, ContractError> {
+        Ok(self.packages.clone())
+    }
+
+    async fn info(&self, name: String) -> Result<PackageInfo, ContractError> {
+        match self.brief_of(&name) {
+            Some(brief) => Ok(PackageInfo {
+                name: brief.name.clone(),
+                version: brief.version.clone(),
+                description: brief.description.clone(),
+                repo: None,
+                size_bytes: Some(1024),
+                install_reason: Some(String::from("explicit")),
+                depends: vec![],
+                required_by: vec![],
+                version_available: None,
+            }),
+            None => Err(ContractError::NativeFailure {
+                code: 4,
+                payload: format!("pkg-not-found: {name} is neither installed nor in a sync db"),
+            }),
+        }
+    }
+
+    async fn search(&self, query: PackageSearch) -> Result<Vec<PackageBrief>, ContractError> {
+        let limit = query
+            .limit
+            .and_then(|l| usize::try_from(l).ok())
+            .unwrap_or(usize::MAX);
+        Ok(self
+            .packages
+            .iter()
+            .filter(|p| p.name.contains(&query.query))
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    async fn install(
+        &self,
+        request: PackageNameRequest,
+    ) -> Result<TransactionResult, ContractError> {
+        self.install_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(TransactionResult {
+            name: request.name,
+            version_applied: Some(String::from("9.9")),
+        })
+    }
+
+    async fn remove(
+        &self,
+        request: PackageNameRequest,
+    ) -> Result<TransactionResult, ContractError> {
+        self.remove_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(TransactionResult {
+            name: request.name,
+            version_applied: None,
+        })
+    }
+
+    async fn history(
+        &self,
+        _query: PackageHistoryQuery,
+    ) -> Result<Vec<PackageHistoryEntry>, ContractError> {
+        Ok(vec![PackageHistoryEntry {
+            ts_epoch_ms: 1,
+            action: omnibus_contracts::dto::packages::PackageAction::Upgrade,
+            name: self
+                .packages
+                .first()
+                .map(|p| p.name.clone())
+                .unwrap_or_default(),
+            from_version: Some(String::from("0.9")),
+            to_version: Some(String::from("1.0")),
+        }])
+    }
+
+    async fn undo(&self, _request: PackageNameRequest) -> Result<UndoResult, ContractError> {
+        self.undo_calls.fetch_add(1, Ordering::SeqCst);
+        if self.undo_expected {
+            Err(ContractError::NativeFailure {
+                code: 3,
+                payload: String::from("undo-no-cache-version: previous version not in cache"),
+            })
+        } else {
+            // The apt no-undo refusal: before any native work, never
+            // mid-transaction (specs/domains/packages.md).
+            Err(ContractError::CapabilityRequired)
+        }
+    }
+}
+
+/// The inventory fake (the flatpak/snap aggregate shape): mirrors the real
+/// adapter's contract — source-stamped list rows, exact-match `info`,
+/// `Unsupported` writes — with one counter across the write-shaped methods
+/// for the never-invoked assertion.
+pub struct FakeInventoryPackages {
+    packages: Vec<PackageBrief>,
+    pub write_attempts: AtomicUsize,
+}
+
+impl FakeInventoryPackages {
+    /// Rows shaped `(store, name, version)`: store "flatpak" or "snap".
+    pub fn new(entries: &[(&str, &str, &str)]) -> Arc<Self> {
+        Arc::new(Self {
+            packages: entries
+                .iter()
+                .map(|(store, name, version)| PackageBrief {
+                    name: (*name).to_string(),
+                    version: (*version).to_string(),
+                    description: None,
+                    repo: (*store == "flatpak").then(|| String::from("flathub")),
+                    source: if *store == "flatpak" {
+                        omnibus_contracts::dto::packages::PackageSource::Flatpak
+                    } else {
+                        omnibus_contracts::dto::packages::PackageSource::Snap
+                    },
+                })
+                .collect(),
+            write_attempts: AtomicUsize::new(0),
+        })
+    }
+}
+
+#[async_trait]
+impl PackageManager for FakeInventoryPackages {
+    fn report(&self) -> AdapterReport {
+        report(
+            "flatpak",
+            "packages",
+            vec![fact_with(
+                cap::PKG_READ,
+                "present",
+                None,
+                Some(String::from(
+                    "read-only flatpak/snap inventory (list/info only); install/remove/undo are \
+                     not declared for these sources — writes belong to the native manager",
+                )),
+                None,
+            )],
+        )
+    }
+
+    async fn list(&self, _request: PackageListRequest) -> Result<Vec<PackageBrief>, ContractError> {
+        Ok(self.packages.clone())
+    }
+
+    async fn info(&self, name: String) -> Result<PackageInfo, ContractError> {
+        match self.packages.iter().find(|p| p.name == name) {
+            Some(brief) => Ok(PackageInfo {
+                name: brief.name.clone(),
+                version: brief.version.clone(),
+                description: None,
+                repo: brief.repo.clone(),
+                size_bytes: None,
+                install_reason: None,
+                depends: vec![],
+                required_by: vec![],
+                version_available: None,
+            }),
+            None => Err(ContractError::NativeFailure {
+                code: 2,
+                payload: format!("pkg-not-found: {name} is not in the flatpak/snap inventory"),
+            }),
+        }
+    }
+
+    async fn search(&self, _query: PackageSearch) -> Result<Vec<PackageBrief>, ContractError> {
+        self.write_attempts.fetch_add(1, Ordering::SeqCst);
+        Err(ContractError::Unsupported {
+            reason: String::from("the flatpak/snap inventory implements list/info only"),
+        })
+    }
+
+    async fn install(
+        &self,
+        _request: PackageNameRequest,
+    ) -> Result<TransactionResult, ContractError> {
+        self.write_attempts.fetch_add(1, Ordering::SeqCst);
+        Err(ContractError::Unsupported {
+            reason: String::from("flatpak/snap sources declare no write operations"),
+        })
+    }
+
+    async fn remove(
+        &self,
+        _request: PackageNameRequest,
+    ) -> Result<TransactionResult, ContractError> {
+        self.write_attempts.fetch_add(1, Ordering::SeqCst);
+        Err(ContractError::Unsupported {
+            reason: String::from("flatpak/snap sources declare no write operations"),
+        })
+    }
+
+    async fn history(
+        &self,
+        _query: PackageHistoryQuery,
+    ) -> Result<Vec<PackageHistoryEntry>, ContractError> {
+        self.write_attempts.fetch_add(1, Ordering::SeqCst);
+        Err(ContractError::Unsupported {
+            reason: String::from("the flatpak/snap inventory has no transaction log"),
+        })
+    }
+
+    async fn undo(&self, _request: PackageNameRequest) -> Result<UndoResult, ContractError> {
+        self.write_attempts.fetch_add(1, Ordering::SeqCst);
+        Err(ContractError::Unsupported {
+            reason: String::from("flatpak/snap sources declare no write operations"),
+        })
+    }
+}
+
+/// A pkg.undo capability fact with the typed value (the native shapes report
+/// it; the suite reads the value back through `PkgUndoValue::from_json`).
+fn common_undo_fact(status: &str, value: Option<serde_json::Value>) -> CapabilityFact {
+    fact_with(cap::PKG_UNDO, status, value, None, None)
 }

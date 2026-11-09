@@ -10,7 +10,8 @@
 //! shape-open `Any`, which cannot carry typed children.
 
 use omnibus_contracts::dto::{
-    Bytes, Milliseconds, NamedValue, OffsetBytes, Severity,
+    Bytes, Milliseconds, NamedValue, OffsetBytes, Percent, Seconds, Severity,
+    app_launcher::{AppEntry, AppSpec, LaunchOutcome, OpenRequest},
     audit::{AuditActor, AuditEvent},
     caps::{
         CapabilitiesDocument, CapabilityEntry, DoctorCommand, DoctorFinding, DoctorReport,
@@ -38,6 +39,10 @@ use omnibus_contracts::dto::{
     probe::{
         AdapterReport, CapabilityFact, DaemonLiveness, DistroFamily, DistroInfo, FloorStatus,
         ManjaroFacts, PlatformReport,
+    },
+    process_telemetry::{
+        PowerStatus, ProcessEntry, ProcessListQuery, ProcessSnapshot, Signal, SignalRequest,
+        SysStats,
     },
     services::{
         ServiceAction, ServiceActionRequest, ServiceActionResult, ServiceFilter,
@@ -79,7 +84,24 @@ fn every_dto_schema_sample_deserializes_into_the_dto() {
     roundtrip::<Bytes>("Bytes");
     roundtrip::<Severity>("Severity");
     roundtrip::<OffsetBytes>("OffsetBytes");
+    roundtrip::<Percent>("Percent");
+    roundtrip::<Seconds>("Seconds");
     roundtrip::<NamedValue>("NamedValue");
+
+    // Application launch (specs/domains/app-launch.md).
+    roundtrip::<AppEntry>("AppEntry");
+    roundtrip::<AppSpec>("AppSpec");
+    roundtrip::<LaunchOutcome>("LaunchOutcome");
+    roundtrip::<OpenRequest>("OpenRequest");
+
+    // Process telemetry (specs/domains/process-telemetry.md).
+    roundtrip::<Signal>("Signal");
+    roundtrip::<ProcessListQuery>("ProcessListQuery");
+    roundtrip::<ProcessEntry>("ProcessEntry");
+    roundtrip::<ProcessSnapshot>("ProcessSnapshot");
+    roundtrip::<SysStats>("SysStats");
+    roundtrip::<PowerStatus>("PowerStatus");
+    roundtrip::<SignalRequest>("SignalRequest");
 
     // Audit (specs/domains/audit.md).
     roundtrip::<AuditActor>("AuditActor");

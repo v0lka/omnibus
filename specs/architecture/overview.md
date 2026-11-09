@@ -45,10 +45,11 @@ MCP hosts: Claude Code / goose / Cursor / any MCP client
 
 ## The Numbers (normative inventory)
 
-- 14 SPI traits across 12 subsystems (11 declared; `AppLauncher` and `ProcessTelemetry` are JIT
-  with v1.5, `AppIntentsBridge` with MS3 — see [spi-registry.md](spi-registry.md)).
-- 37 MCP tools (29 through v1.0; eight arrive with v1.5, Linux only — see [tool-registry.md](tool-registry.md)).
-- 26 capability constants (18 shipped; six arrive with v1.5, the two `intents.*` with MS3 — see
+- 14 SPI traits across 12 subsystems (13 declared; `AppLauncher` and `ProcessTelemetry` arrived
+  with v1.5, `AppIntentsBridge` stays JIT with MS3 — see [spi-registry.md](spi-registry.md)).
+- 37 MCP tools (29 through v1.0, eight more with v1.5, Linux only — 35 shipped; the two `intent_*`
+  tools with MS3 — see [tool-registry.md](tool-registry.md)).
+- 26 capability constants (24 shipped; the two `intents.*` with MS3 — see
   [capability-model.md](capability-model.md)).
 - 8 error codes (see [error-taxonomy.md](error-taxonomy.md)).
 - 3 support tiers, 9 target desktop platforms (see [platform-matrix.md](platform-matrix.md)).

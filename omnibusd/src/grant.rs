@@ -31,6 +31,12 @@ fn section_of(capability: &str) -> Option<Section> {
         cap::PKG_WRITE,
         cap::PKG_UNDO,
         cap::FILES_SCOPE_WRITE,
+        // App launch/open (roadmap 2.7.2): the write arm of subsystem 11,
+        // always behind the out-of-band `app.launch` grant.
+        cap::APP_LAUNCH,
+        // ps.signal (roadmap 2.8.3): the write arm of subsystem 12, always
+        // behind the out-of-band `ps.signal` grant.
+        cap::PS_SIGNAL,
     ];
     if write_gated.contains(&capability) {
         return Some(Section::Write);

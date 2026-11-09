@@ -27,11 +27,14 @@ omnibus-adapter-systemd1 = { path = "../omnibus-adapter-systemd1" }
 omnibus-adapter-alpm = { path = "../omnibus-adapter-alpm", optional = true }
 omnibus-adapter-apt = { path = "../omnibus-adapter-apt" }
 omnibus-adapter-dnf = { path = "../omnibus-adapter-dnf" }
+omnibus-adapter-flatpak = { path = "../omnibus-adapter-flatpak" }
 omnibus-adapter-xdg-portals = { path = "../omnibus-adapter-xdg-portals" }
 omnibus-adapter-fs-xdg = { path = "../omnibus-adapter-fs-xdg" }
 omnibus-adapter-kb-archwiki = { path = "../omnibus-adapter-kb-archwiki" }
 omnibus-adapter-kb-guides = { path = "../omnibus-adapter-kb-guides" }
 omnibus-adapter-nm = { path = "../omnibus-adapter-nm" }
+omnibus-adapter-launch = { path = "../omnibus-adapter-launch" }
+omnibus-adapter-proc = { path = "../omnibus-adapter-proc" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "process", "time", "io-util"] }
 # The doctor CLI kills a timed-out mutation's whole process group (the compound
 # `sudo … && sudo …` commands it applies fork descendants a bare child kill

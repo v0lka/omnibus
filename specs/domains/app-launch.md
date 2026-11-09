@@ -9,12 +9,14 @@ associated application. Launched processes land in the user's cgroup and journal
 
 ## Key Files
 
-- `omnibus-contracts/src/spi/app-launcher.rs` (planned) - the `AppLauncher` trait, declared
-  just-in-time with its first implementation (task 2.7.1)
-- `omnibus-contracts/src/suite/` - the `app_launcher_suite` contract-suite family (planned with
-  task 2.7.1), wired from the adapter's `tests/contract_suite.rs`
-- `omnibus-adapter-launch/src/` (planned) - Linux provider: `.desktop` inventory, `systemd-run
-  --user`, `xdg-open` (task 2.7.2)
+- `omnibus-contracts/src/spi/app-launcher.rs` - the `AppLauncher` trait, declared
+  just-in-time (task 2.7.1) together with its first implementation (task 2.7.2)
+- `omnibus-contracts/src/suite/` - the `app_launcher_suite` contract-suite family, wired
+  from the adapter's `tests/contract_suite.rs` (task 2.7.2)
+- `omnibus-adapter-launch/src/` - Linux provider: `.desktop` inventory, `systemd-run
+  --user`, `xdg-open` (task 2.7.2); `omnibus-adapter-launch/tests/contract_suite.rs`
+  binds the suite against a synthetic `.desktop` fixture stand plus the live
+  systemd user manager
 
 ## Capability and Tools
 

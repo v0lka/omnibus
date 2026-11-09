@@ -1,11 +1,16 @@
 //! The adapter registry: exactly one active adapter per subsystem at any moment
-//! (specs/architecture/spi-registry.md Invariants). Slots are filled by the
-//! composition root from the probe report; a slot left empty means the subsystem
-//! is absent — tools resolve to `AdapterUnavailable`/hidden per the ladder.
+//! (specs/architecture/spi-registry.md Invariants), with the one documented
+//! exception: the packages subsystem carries the native manager plus the
+//! read-only flatpak/snap inventory adapter side by side (v1.5, roadmap 2.9.1
+//! — spi-registry.md §9 exception; write semantics stay with the native
+//! manager). Slots are filled by the composition root from the probe report; a
+//! slot left empty means the subsystem part is absent — tools resolve to
+//! `AdapterUnavailable`/hidden per the ladder.
 
 use std::sync::Arc;
 
 use omnibus_contracts::spi::a11y::DesktopA11y;
+use omnibus_contracts::spi::app_launcher::AppLauncher;
 use omnibus_contracts::spi::audit_sink::AuditSink;
 use omnibus_contracts::spi::files::FileScope;
 use omnibus_contracts::spi::journal::Journal;
@@ -14,6 +19,7 @@ use omnibus_contracts::spi::net::NetworkStatus;
 use omnibus_contracts::spi::packages::PackageManager;
 use omnibus_contracts::spi::portals::{Notify, ScreenCapture};
 use omnibus_contracts::spi::probe::PlatformProbe;
+use omnibus_contracts::spi::process_telemetry::ProcessTelemetry;
 use omnibus_contracts::spi::services::ServiceManager;
 
 /// One typed slot per subsystem (None = not activated).
@@ -24,12 +30,24 @@ pub struct Registry {
     pub audit_sink: Option<Arc<dyn AuditSink>>,
     pub services: Option<Arc<dyn ServiceManager>>,
     pub packages: Option<Arc<dyn PackageManager>>,
+    /// The read-only flatpak/snap inventory (v1.5, roadmap 2.9.1): the one
+    /// documented exception to the one-active-adapter rule (§9) — active
+    /// alongside `packages` (specs/contracts/core-adapters.md). Read-only by
+    /// contract: `pkg_list`/`pkg_info` aggregate it, writes never reach it.
+    pub packages_inventory: Option<Arc<dyn PackageManager>>,
     pub screen: Option<Arc<dyn ScreenCapture>>,
     pub notify: Option<Arc<dyn Notify>>,
     pub files: Option<Arc<dyn FileScope>>,
     pub kb: Option<Arc<dyn KnowledgeBase>>,
     pub probe: Option<Arc<dyn PlatformProbe>>,
     pub net: Option<Arc<dyn NetworkStatus>>,
+    /// App launch (v1.5, subsystem 11): the `.desktop` inventory and the
+    /// transient-unit launch/open writes (specs/domains/app-launch.md).
+    pub app_launcher: Option<Arc<dyn AppLauncher>>,
+    /// Process telemetry (v1.5, subsystem 12): `/proc` reads, system
+    /// statistics, UPower power status and the granted `ps.signal` write
+    /// (specs/domains/process-telemetry.md).
+    pub process_telemetry: Option<Arc<dyn ProcessTelemetry>>,
     /// Test-only extra report (caps assembly tests; P6 keeps fakes near the core).
     #[cfg(test)]
     pub report_fixture: Option<omnibus_contracts::dto::probe::AdapterReport>,
@@ -61,6 +79,9 @@ impl Registry {
         if let Some(a) = &self.packages {
             reports.push(a.report());
         }
+        if let Some(a) = &self.packages_inventory {
+            reports.push(a.report());
+        }
         if let Some(a) = &self.screen {
             reports.push(a.report());
         }
@@ -77,6 +98,12 @@ impl Registry {
             reports.push(a.report());
         }
         if let Some(a) = &self.net {
+            reports.push(a.report());
+        }
+        if let Some(a) = &self.app_launcher {
+            reports.push(a.report());
+        }
+        if let Some(a) = &self.process_telemetry {
             reports.push(a.report());
         }
         #[cfg(test)]

@@ -74,4 +74,6 @@ pub mod a11y;
 pub mod families;
 pub mod journal;
 
-pub use families::{audit_sink, files, kb, net, packages, portals, probe, services};
+pub use families::{
+    app_launcher, audit_sink, files, kb, net, packages, portals, probe, process_telemetry, services,
+};

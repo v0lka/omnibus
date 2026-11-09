@@ -1,0 +1,29 @@
+[package]
+name = "omnibus-adapter-proc"
+version.workspace = true
+edition.workspace = true
+description = "Process-telemetry adapter: /proc + sysfs reads (ps.list/ps.info/sys.stats), UPower power status, and the granted ps.signal write (roadmap 2.8.2/2.8.3)."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
+omnibus-contracts = { path = "../omnibus-contracts" }
+async-trait = "0.1"
+# UPower over the system D-Bus (org.freedesktop.UPower) for power.status.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+serde = { version = "1", features = ["derive"] }
+# Wall-clock budgets around bus probes (mirrors the nm/atspi adapters) and the
+# sys_stats delta-sample window.
+tokio = { version = "1", default-features = false, features = ["time", "sync"] }
+# Safe syscall wrappers, honoring the workspace `unsafe_code = "forbid"`
+# (the fs-xdg discipline): `kill_process` is the entire `ps.signal` write,
+# `page_size` feeds the RSS arithmetic. No unsafe anywhere.
+rustix = { version = "1.1.5", features = ["process", "param"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process"] }
+tempfile = "3"
+# The numeric-signal seam test parses wire forms into the contract DTO.
+serde_json = "1"

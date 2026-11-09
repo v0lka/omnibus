@@ -52,6 +52,20 @@ impl Probe {
             DistroFamily::Other => {}
         }
         adapters.push(String::from("xdg-portals"));
+        // App launch is a subsystem-level row on every Linux family (v1.5:
+        // `.desktop` inventory + systemd-run --user + xdg-open); the binary
+        // presence facts gate its tools per-arm, not the family.
+        adapters.push(String::from("launch"));
+        // Process telemetry is a subsystem-level row on every Linux family
+        // (v1.5): /proc and sysfs carry no version floor, so the read part
+        // activates everywhere; the UPower liveness row decides the power
+        // arm per stand.
+        adapters.push(String::from("proc"));
+        // The flatpak/snap inventory is a subsystem-level row on every Linux
+        // family (v1.5, roadmap 2.9.1): the store CLI presence facts decide
+        // which stores the adapter serves per stand; the wiring activates it
+        // alongside the native manager — the one documented §9 exception.
+        adapters.push(String::from("flatpak"));
         adapters.push(String::from("fs-xdg"));
         if matches!(family, DistroFamily::Arch | DistroFamily::Manjaro) {
             // Platform matrix, Knowledge column: ArchWiki (Arch) and ArchWiki +
@@ -153,6 +167,15 @@ impl PlatformProbe for Probe {
             )
             .await
             .is_some();
+        // UPower: the system power daemon (org.freedesktop.UPower on the
+        // system bus). Its bus-name ownership is the presence fact
+        // `power.status` rides: without UPower *and* a battery the tool
+        // hides (platform-matrix.md, R3/R7 — absence is honest, never an
+        // error in the log).
+        let upower_alive = r
+            .run("/usr/bin/busctl", &["status", "org.freedesktop.UPower"])
+            .await
+            .is_some();
 
         let liveness = vec![
             DaemonLiveness {
@@ -182,6 +205,13 @@ impl PlatformProbe for Probe {
                 alive: net_alive,
                 detail: None,
             },
+            DaemonLiveness {
+                name: String::from("UPower"),
+                alive: upower_alive,
+                detail: Some(String::from(
+                    "system power daemon; power.status hides without UPower + a battery",
+                )),
+            },
         ];
 
         let mut backends_present: Vec<String> = Vec::new();
@@ -194,6 +224,20 @@ impl PlatformProbe for Probe {
             // backend on — wl-clipboard (Wayland) and xclip (X11).
             ("wl-clipboard", "/usr/bin/wl-paste"),
             ("xclip", "/usr/bin/xclip"),
+            // App-launch backends (roadmap 2.7.2): `systemd-run` gates the
+            // transient-unit launch arm, `xdg-open` the opener arm — the
+            // absence fact the wiring passes to the launch adapter and the
+            // core's ladder consults before hiding `app.open` (R3: the
+            // reason lives in capabilities()).
+            ("systemd-run", "/usr/bin/systemd-run"),
+            ("xdg-open", "/usr/bin/xdg-open"),
+            // Store inventory (v1.5, roadmap 2.9.1): the CLI-binary presence
+            // facts the wiring consults before wiring the flatpak/snap
+            // inventory adapter alongside the native manager (the §9
+            // exception). An absent store is plain absence from the
+            // aggregated pkg_list output (R7).
+            ("flatpak", "/usr/bin/flatpak"),
+            ("snap", "/usr/bin/snap"),
         ] {
             if r.file_exists(path) {
                 backends_present.push(String::from(backend));
@@ -349,6 +393,9 @@ mod tests {
                 "systemd1",
                 "alpm",
                 "xdg-portals",
+                "launch",
+                "proc",
+                "flatpak",
                 "fs-xdg",
                 "kb-archwiki",
                 "nm"
@@ -357,6 +404,10 @@ mod tests {
             "candidates come from the normative set"
         );
         assert!(report.adapters_selected.contains(&String::from("nm")));
+        assert!(
+            report.adapters_selected.contains(&String::from("proc")),
+            "process telemetry is a subsystem-level row on every Linux family"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -381,6 +432,83 @@ mod tests {
         // Floor constants stay in contracts (no magic numbers here).
         assert_eq!(omnibus_contracts::floors::SYSTEMD_FLOOR.major, 252);
         assert_eq!(ATSPI_FLOOR.minor, 50);
+    }
+
+    /// Roadmap 2.7.2 (app-launch backends): `systemd-run` and `xdg-open`
+    /// surface in `backends_present` — the machine facts the wiring passes to
+    /// the launch adapter and the core's ladder consults before hiding
+    /// `app.open` (R3). Absent binaries are never claimed as present.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn app_launch_backends_surface_in_the_report() {
+        let runner = FakeRunner::default()
+            .with_file("/usr/bin/systemd-run", "ELF")
+            .with_file("/usr/bin/xdg-open", "ELF");
+        let probe = Probe::system(std::sync::Arc::new(runner));
+        let report = probe
+            .detect()
+            .await
+            .expect("detect never fails the session");
+        assert!(
+            report
+                .backends_present
+                .contains(&String::from("systemd-run")),
+            "systemd-run presence is a report fact: {:?}",
+            report.backends_present
+        );
+        assert!(
+            report.backends_present.contains(&String::from("xdg-open")),
+            "xdg-open presence is a report fact: {:?}",
+            report.backends_present
+        );
+        // The empty stand claims neither binary (honest absence).
+        let empty = Probe::system(std::sync::Arc::new(FakeRunner::default()))
+            .detect()
+            .await
+            .expect("detect never fails the session");
+        assert!(
+            !empty
+                .backends_present
+                .iter()
+                .any(|b| b == "systemd-run" || b == "xdg-open"),
+            "absent app-launch backends are never claimed present: {:?}",
+            empty.backends_present
+        );
+    }
+
+    /// Roadmap 2.8.2 (process telemetry, power arm): the UPower bus-name
+    /// ownership surfaces as a liveness row — the presence fact
+    /// `power.status` hides behind on a machine without UPower/battery
+    /// (R3/R7: absence is honest, never an error in the log). Absence is
+    /// never claimed as alive.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn upower_liveness_surfaces_in_the_report() {
+        let runner =
+            FakeRunner::default().stub("/usr/bin/busctl status org.freedesktop.UPower", "ok\n");
+        let probe = Probe::system(std::sync::Arc::new(runner));
+        let report = probe
+            .detect()
+            .await
+            .expect("detect never fails the session");
+        let upower = report
+            .liveness
+            .iter()
+            .find(|l| l.name == "UPower")
+            .expect("the UPower liveness row exists");
+        assert!(upower.alive, "a live bus name is reported alive");
+        // The empty stand claims nothing (honest absence).
+        let empty = Probe::system(std::sync::Arc::new(FakeRunner::default()))
+            .detect()
+            .await
+            .expect("detect never fails the session");
+        let upower = empty
+            .liveness
+            .iter()
+            .find(|l| l.name == "UPower")
+            .expect("the UPower liveness row exists even when absent");
+        assert!(
+            !upower.alive,
+            "an absent UPower is never claimed alive (R7)"
+        );
     }
 
     /// Roadmap 1.4.1 What ("wl-clipboard/xclip presence"): the clipboard

@@ -11,7 +11,7 @@ The packages domain covers listing, inspecting, installing, removing, and - wher
 - `omnibus-adapter-apt/src/` - Debian/Ubuntu/Mint provider (CLI mapping per ADR-002: `dpkg-query`, `apt-cache`, `apt-get`, history from `/var/log/apt/history.log`)
 - `omnibus-adapter-dnf/src/` - Fedora provider (the dnf/dnf5 backend swap is resolved inside the adapter)
 - `omnibus-adapter-brew/src/` (planned) - macOS provider (MS3): formula + cask; `mas` as the optional App Store backend
-- `omnibus-adapter-flatpak/src/` (planned) - v1.5 flatpak/snap inventory provider: one crate for both stores, called through their CLI binaries; handles never leave the adapter
+- `omnibus-adapter-flatpak/src/` - v1.5 flatpak/snap inventory provider: one crate for both stores, called through their CLI binaries; handles never leave the adapter. Read-part suite binder: the aggregate fixtures live in `omnibus-core/tests/package_aggregation.rs` (alpm+flatpak and apt+flatpak shapes)
 
 ## Capability and Tools
 
@@ -52,6 +52,14 @@ Trait `PackageManager` operations: `list`, `info`, `search`, `install`, `remove`
   in `capabilities()`, and write semantics belong to the native manager only.
 - (v1.5) With flatpak/snap absent from the machine, the aggregated `pkg_list`/`pkg_info` output is
   unchanged and reports no degradation (R7).
+- (v1.5) The aggregated `pkg_list` reads the active providers concurrently; native rows always
+  precede inventory rows and the request `limit` truncates the merged output. An error from either
+  active provider fails the whole call - a silently skipped half would claim completeness the
+  merged output does not have.
+- (v1.5) The aggregated `pkg_info` asks the native manager first and falls through to the inventory
+  only on its miss; when nothing answers, the native manager's error is the honest answer. The
+  audit event names its contributors: the `adapter` field carries the two adapters joined with `+`
+  for a merged `pkg_list`, and the answering adapter for `pkg_info`.
 
 ## Degradation
 

@@ -1,0 +1,22 @@
+[package]
+name = "omnibus-adapter-flatpak"
+version.workspace = true
+edition.workspace = true
+description = "flatpak/snap adapter: read-only package inventory (list/info) through the flatpak and snap CLIs; handles never leave the adapter."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Adapters depend only on omnibus-contracts (roadmap 1.1.2; lint-enforced edge).
+omnibus-contracts = { path = "../omnibus-contracts" }
+async-trait = "0.1"
+# rt: the test runtime; process: flatpak/snap subprocesses; time: the per-call
+# budget; io-util: the bounded stdout/stderr pipe reads; macros: tokio::join!
+# (both store scans run concurrently under one budget).
+tokio = { version = "1", features = ["rt", "process", "time", "io-util", "macros"] }
+
+[dev-dependencies]
+# Feature sets are additive across dependency groups: tests additionally need
+# the macros behind #[tokio::test].
+tokio = { version = "1", features = ["macros"] }

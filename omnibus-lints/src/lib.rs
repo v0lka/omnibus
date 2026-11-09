@@ -45,12 +45,13 @@ pub const CONTRACTS_ALLOWED_DEPS: [&str; 6] = [
 ];
 
 /// The capability domains the R4-CON predicate accepts as the first segment of a
-/// capability-shaped literal — the eight families of the closed capability
+/// capability-shaped literal — the families of the closed capability
 /// registry (specs/architecture/capability-model.md). The registry drift guard in
 /// `tests/fixtures.rs` fails when `omnibus-contracts/src/capabilities.rs` grows a
 /// capability in a new domain without extending this list.
-pub const CAPABILITY_DOMAINS: [&str; 8] = [
-    "desktop", "journal", "service", "pkg", "portal", "files", "kb", "net",
+pub const CAPABILITY_DOMAINS: [&str; 12] = [
+    "desktop", "journal", "service", "pkg", "portal", "files", "kb", "net", "app", "ps", "sys",
+    "power",
 ];
 
 /// One lint violation.
@@ -317,7 +318,7 @@ pub fn manifest_dependency_names(manifest: &Path) -> Vec<String> {
 /// A capability literal is a double-quoted string of `{domain}.{feature}[.{qualifier}]`
 /// shape: at least two dot-separated segments, every segment lowercase, and the
 /// first segment a capability domain of the registry (desktop, journal, service,
-/// pkg, portal, files, kb, net). Restricting the first segment to registry domains
+/// pkg, portal, files, kb, net, app). Restricting the first segment to registry domains
 /// keeps D-Bus names like `org.freedesktop.systemd1` out of scope while every
 /// capability-shaped literal stays registry-only.
 pub fn lint_con(root: &Path) -> Vec<Finding> {

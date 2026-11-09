@@ -677,6 +677,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "omnibus-adapter-flatpak"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "omnibus-contracts",
+ "tokio",
+]
+
+[[package]]
 name = "omnibus-adapter-fs-xdg"
 version = "0.1.0"
 dependencies = [
@@ -725,12 +734,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "omnibus-adapter-launch"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "omnibus-contracts",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "omnibus-adapter-nm"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
  "serde",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
+name = "omnibus-adapter-proc"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "omnibus-contracts",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "zbus",
 ]
@@ -807,11 +840,14 @@ dependencies = [
  "omnibus-adapter-apt",
  "omnibus-adapter-atspi",
  "omnibus-adapter-dnf",
+ "omnibus-adapter-flatpak",
  "omnibus-adapter-fs-xdg",
  "omnibus-adapter-journald",
  "omnibus-adapter-kb-archwiki",
  "omnibus-adapter-kb-guides",
+ "omnibus-adapter-launch",
  "omnibus-adapter-nm",
+ "omnibus-adapter-proc",
  "omnibus-adapter-systemd1",
  "omnibus-adapter-xdg-portals",
  "omnibus-contracts",

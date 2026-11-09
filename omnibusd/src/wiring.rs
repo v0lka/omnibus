@@ -198,6 +198,18 @@ async fn build_registry(
         }
         None => {}
     }
+    // The store inventory (v1.5, roadmap 2.9.1): wired ALONGSIDE the native
+    // manager whenever a store CLI is present — the one documented exception
+    // to the one-active-adapter rule (§9, spi-registry.md; the spec text
+    // lives in specs/contracts/core-adapters.md). The adapter is read-only by
+    // contract: pkg_list/pkg_info aggregate it, writes never reach it. A
+    // failed detection (neither store live at wire time) leaves the slot
+    // empty and the aggregated output exactly the native manager's (R7).
+    if inventory_candidate(platform)
+        && let Ok(adapter) = omnibus_adapter_flatpak::FlatpakInventory::detect().await
+    {
+        registry.packages_inventory = Some(Arc::new(adapter));
+    }
     if alive("xdg-desktop-portal")
         && let Ok(adapter) = omnibus_adapter_xdg_portals::PortalsAdapter::connect().await
     {
@@ -239,6 +251,34 @@ async fn build_registry(
     {
         registry.net = Some(Arc::new(adapter));
     }
+    // App launch (v1.5, subsystem 11, roadmap 2.7.2): wired on every Linux
+    // stand — the `.desktop` inventory is plain filesystem fact, and the
+    // per-arm backend presence (systemd-run / xdg-open from the probe's
+    // backends_present) decides which tools the ladder serves. A stand
+    // without systemd-run gets no app.launch capability fact at all (both
+    // write tools hide); a stand without xdg-open keeps app.launch while the
+    // report's fact note names the hidden app.open — the R3 reason lives in
+    // capabilities(), never in a log error.
+    // App launch (v1.5, subsystem 11, roadmap 2.7.2): wired on every Linux
+    // stand — the `.desktop` inventory is plain filesystem fact, and the
+    // per-arm backend presence (systemd-run / xdg-open from the probe's
+    // backends_present) decides which tools the ladder serves. A stand
+    // without systemd-run gets no app.launch capability fact at all (both
+    // write tools hide); a stand without xdg-open keeps app.launch while the
+    // report's fact note names the hidden app.open — the R3 reason lives in
+    // capabilities(), never in a log error.
+    registry.app_launcher = Some(Arc::new(
+        omnibus_adapter_launch::LaunchAdapter::from_backends(&platform.backends_present),
+    ));
+    // Process telemetry (v1.5, subsystem 12, roadmap 2.8.2/2.8.3): wired on
+    // every Linux stand — /proc and sysfs carry no version floor, so the
+    // read part activates everywhere. The UPower liveness row (probe
+    // bus-name detection) decides the power arm per stand: without
+    // UPower+battery the adapter emits no power.read fact (power.status
+    // hides, the ps.read note names the reason — R3/R7, clean log).
+    registry.process_telemetry = Some(Arc::new(omnibus_adapter_proc::ProcAdapter::from_probe(
+        alive("UPower"),
+    )));
     registry
 }
 
@@ -322,6 +362,19 @@ fn pkg_candidate(platform: &PlatformReport) -> Option<PkgBackend> {
 enum PkgBackend {
     Apt,
     Dnf,
+}
+
+/// Whether the store inventory row wires on this stand (v1.5, roadmap 2.9.1):
+/// a flatpak or snap CLI in the probe's `backends_present` — a pure decision
+/// made before any I/O, family-independent (a store can sit next to any
+/// native manager, or alone on a stand with none). Whether a store actually
+/// serves is decided inside the adapter's detection (per-store wire-time
+/// liveness); a failed detection leaves the slot honestly empty (R7).
+fn inventory_candidate(platform: &PlatformReport) -> bool {
+    platform
+        .backends_present
+        .iter()
+        .any(|backend| backend == "flatpak" || backend == "snap")
 }
 
 /// The Knowledge source the platform matrix promises for the family, decided
@@ -704,6 +757,41 @@ mod tests {
             )),
             None
         );
+    }
+
+    #[test]
+    fn inventory_candidate_follows_the_store_cli_presence() {
+        // v1.5 (roadmap 2.9.1): a store CLI wires the inventory on any
+        // family — next to the native manager (the §9 exception) or alone.
+        for family in [
+            DistroFamily::Arch,
+            DistroFamily::Manjaro,
+            DistroFamily::Debian,
+            DistroFamily::Ubuntu,
+            DistroFamily::Mint,
+            DistroFamily::Fedora,
+            DistroFamily::Other,
+        ] {
+            assert!(
+                inventory_candidate(&fixture_report(family, &["flatpak"], true)),
+                "{family:?}: flatpak present wires the inventory"
+            );
+            assert!(
+                inventory_candidate(&fixture_report(family, &["snap"], true)),
+                "{family:?}: snap present wires the inventory"
+            );
+            assert!(
+                !inventory_candidate(&fixture_report(family, &[], true)),
+                "{family:?}: no store CLI, no inventory (plain absence, R7)"
+            );
+        }
+        // The floor row is irrelevant to the inventory: reads carry no
+        // version floor (platform-matrix.md), so the decision ignores it.
+        assert!(inventory_candidate(&fixture_report(
+            DistroFamily::Debian,
+            &["flatpak"],
+            false
+        )));
     }
 
     #[test]

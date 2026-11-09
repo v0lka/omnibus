@@ -8,6 +8,22 @@ crate::dto!(
         pub version: String,
         pub description: Option<String>,
         pub repo: Option<String>,
+        /// Which store the package comes from (v1.5 aggregation, roadmap
+        /// 2.9.1): the native manager, the flatpak inventory or the snap
+        /// inventory. Every package in `pkg_list` names its source
+        /// explicitly — the invariant is never implied by absence.
+        pub source: PackageSource,
+    }
+);
+
+crate::dto_enum!(
+    /// The store of a package in the aggregated `pkg_list`/`pkg_info` output
+    /// (specs/domains/packages.md v1.5): the native family manager, or the
+    /// read-only flatpak/snap inventory.
+    pub enum PackageSource {
+        Native,
+        Flatpak,
+        Snap,
     }
 );
 
@@ -105,6 +121,7 @@ mod tests {
     fn package_dto_roundtrips_with_schema() {
         for node in [
             &PackageBrief::schema() as &crate::schema::SchemaNode,
+            &PackageSource::schema(),
             &PackageInfo::schema(),
             &PackageSearch::schema(),
             &PackageHistoryEntry::schema(),

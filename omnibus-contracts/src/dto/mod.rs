@@ -3,6 +3,7 @@
 //! native types never cross the seam. Every struct below is declared together with
 //! its generated schema via the [`crate::dto!`] macro family.
 
+pub mod app_launcher;
 pub mod audit;
 pub mod caps;
 pub mod desktop;
@@ -13,6 +14,7 @@ pub mod net;
 pub mod packages;
 pub mod portals;
 pub mod probe;
+pub mod process_telemetry;
 pub mod services;
 
 use core::fmt;
@@ -37,6 +39,19 @@ crate::dto_newtype!(
     pub struct OffsetBytes(pub u64);
 );
 
+crate::dto_newtype!(
+    /// A share of a whole in whole-percent points (0–100 per core; aggregated
+    /// loads may exceed 100). Telemetry unit (v1.5,
+    /// specs/architecture/spi-registry.md).
+    pub struct Percent(pub u32);
+);
+
+crate::dto_newtype!(
+    /// A duration in whole seconds — the coarse telemetry unit; finer timing
+    /// uses [`Milliseconds`].
+    pub struct Seconds(pub u64);
+);
+
 impl fmt::Display for Milliseconds {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}ms", self.0)
@@ -52,6 +67,18 @@ impl fmt::Display for Bytes {
 impl fmt::Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "sev{}", self.0)
+    }
+}
+
+impl fmt::Display for Percent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}%", self.0)
+    }
+}
+
+impl fmt::Display for Seconds {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}s", self.0)
     }
 }
 

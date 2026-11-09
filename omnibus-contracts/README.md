@@ -12,11 +12,13 @@ are restricted to the serde/async allowlist (`serde`, `serde_json`, `async-trait
   implementation (ADR-011). MS1: `DesktopA11y`, `Journal` + `AuditSink`,
   `ServiceManager`, `PackageManager`, `ScreenCapture` + `Notify`, `FileScope`,
   `KnowledgeBase`, `PlatformProbe`; MS2 adds `NetworkStatus` (with
-  `omnibus-adapter-nm`). `AppIntentsBridge` waits for its macOS implementation.
+  `omnibus-adapter-nm`); v1.5 adds `AppLauncher` (with `omnibus-adapter-launch`)
+  and `ProcessTelemetry` (with `omnibus-adapter-proc`).
+  `AppIntentsBridge` waits for its macOS implementation.
 - `src/dto/` — flat named DTOs, each declared together with its generated JSON
   schema (`dto!` / `dto_enum!` / `dto_newtype!` macros — one declaration, no
   hand-written schema copy to drift). Newtypes for units (`Milliseconds`, `Bytes`,
-  `Severity`); opaque tokens in `src/tokens.rs`.
+  `Severity`, `Percent`, `Seconds`); opaque tokens in `src/tokens.rs`.
 - `src/capabilities.rs` — the closed registry of capability name constants. Name
   literals anywhere else are an R4-CON lint violation.
 - `src/errors.rs` — the closed eight-code taxonomy.
@@ -36,9 +38,47 @@ are restricted to the serde/async allowlist (`serde`, `serde_json`, `async-trait
 ```rust
 #[tokio::test]
 async fn contract_suite() {
-    let report = omnibus_contracts::suite::journal_suite(
+    let report = omnibus_contracts::suite::journal::journal_suite(
         || Box::new(MyJournal::configured_for_suite()),
         omnibus_contracts::suite::journal::JournalFixture::default(),
+    ).await;
+    assert!(report.is_clean(), "{report}");
+}
+```
+
+The `AppLauncher` suite follows the same pattern (fixture: the known app your
+backend lists and can launch; the optional `openable_target` gates `open` when
+your stand declares one):
+
+```rust
+#[tokio::test]
+async fn contract_suite_app_launcher() {
+    let report = omnibus_contracts::suite::app_launcher::app_launcher_suite_with_fixture(
+        || Box::new(MyLauncher::configured_for_suite()),
+        omnibus_contracts::suite::app_launcher::AppLauncherFixture {
+            known_app: String::from("suite-app.desktop"),
+            openable_target: String::from("https://suite.invalid/"),
+        },
+    ).await;
+    assert!(report.is_clean(), "{report}");
+}
+```
+
+The `ProcessTelemetry` suite follows the same pattern (fixture: the known pid
+your backend lists, snapshots, and signals successfully — the stand binds a
+test process with the `ps.signal` grant wired; the sentinel pids
+`SENTINEL_PID_MISSING` / `SENTINEL_PID_SLOW` / `SENTINEL_PID_POISON` in
+`omnibus_contracts::suite::process_telemetry` carry the negative injections):
+
+```rust
+#[tokio::test]
+async fn contract_suite_process_telemetry() {
+    use omnibus_contracts::suite::process_telemetry::{ProcessTelemetryFixture, process_telemetry_suite_with_fixture};
+    let report = process_telemetry_suite_with_fixture(
+        || Box::new(MyProc::configured_for_suite()),
+        ProcessTelemetryFixture {
+            known_pid: 4242,
+        },
     ).await;
     assert!(report.is_clean(), "{report}");
 }

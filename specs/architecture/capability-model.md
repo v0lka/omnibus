@@ -13,7 +13,7 @@ spec fixes the format, the registry, detection levels, and the degradation ladde
 contracts. Registry constants live in `omnibus-contracts`; name literals elsewhere in code are
 forbidden (CI lint).
 
-## Registry (26 constants; 18 shipped, +6 with v1.5, +2 with MS3)
+## Registry (26 constants; 24 shipped, +2 with MS3)
 
 | Domain | Constants |
 |---|---|

@@ -8,6 +8,10 @@ human at release time. The evidence for what is already verified locally lives
 in [ms2-acceptance.md](verification/ms2-acceptance.md); this file is the
 procedure the release owner executes to close the rest.
 
+A v1.5 (minor) release re-runs sections 1–5 unchanged and applies the deltas
+of [§6](#6-v15-release-delta-roadmap-task-292) — no new sections replace the
+v1.0 procedure, they extend it.
+
 ## 1. Gates — all green before anything else
 
 Run from the repo root, in this order. A red gate has no override.
@@ -142,9 +146,61 @@ The v1.0 release notes must contain, in this order:
 - [ ] Positioning updates (Ubuntu/Mint/Fedora/Debian segments from the
       pitch), Show HN follow-up, Phoronix/Hackaday article.
 
+## 6. v1.5 release delta (roadmap task 2.9.2)
+
+v1.5 is an additive minor release (the closed agent loop + live state +
+full package inventory). The v1.0 procedure above runs verbatim; these rows
+are the v1.5-specific additions. The claims ladder (decision D9, pitch
+"Честные границы"/Honest boundaries) is the guardrail: v1.0 claimed "the
+full contract on the target distros"; v1.5 claims "the closed agent loop +
+live state + full inventory" on Linux — and never the strong "AI-native OS"
+form.
+
+- [ ] G10 smoke gate covers the closed loop: `ci/smoke/run-demos.sh` now
+      includes `demo5-closed-loop.sh` — `app.launch` under grant → `ps.list`
+      observes the transient unit (the LaunchOutcome unit name inside the
+      cgroup path is the join key) → `journal_query` reads the launched
+      output → `ps.signal` under grant terminates it. Expected: the demo
+      passes on a real-session machine; on machines without a live systemd
+      user manager (all CI containers) the granted half skips honestly and
+      the no-grant refusal legs still pass (the same honest-skip rule as
+      every other demo).
+- [ ] The closed-loop scenario is green on the reference platforms —
+      minimum Arch, Manjaro, Ubuntu LTS, Fedora (roadmap 2.9.2 AC1):
+      | Platform | Where the leg runs | What v1.5 adds |
+      |---|---|---|
+      | Arch | `.github/workflows/ci.yml` `matrix-t1` | demo5 rides `run-demos.sh` (refusal legs in-container; full loop on the reference machine) |
+      | Manjaro | `.github/workflows/manjaro.yml` (+ VM track) | demo5 on the container legs and the real-session VM legs (there a SKIP means a broken session) |
+      | Ubuntu LTS | `.github/workflows/t2.yml` `ubuntu-lts` (+ `ubuntu-26.04`) | demo5 rides the `smoke: true` leg (refusal legs; granted half honest-SKIP without a user manager) |
+      | Fedora | `.github/workflows/t2.yml` `fedora` | same as Ubuntu LTS |
+      The matrix definitions (`ci/matrix/t2.yml`) gain no new legs for
+      v1.5 — the new demo rides the existing smoke legs (`ci/matrix/README.md`
+      documents the split).
+- [ ] Release notes carry the v1.5 content (roadmap 2.9.2 AC2; the draft
+      lives in [release-notes-1.5.0-draft.md](release-notes-1.5.0-draft.md)):
+      the six new capabilities (`app.read`, `app.launch`, `ps.read`,
+      `ps.signal`, `sys.read`, `power.read`) and the honest boundaries —
+      flatpak/snap inventory is read-only, `power.status` appears only
+      "when present" (UPower + battery), launch and signal sit behind
+      human-issued write grants — plus the D9 claims ladder restated.
+- [ ] Release observation (roadmap 2.9.2 AC3): the additive-only diff audit
+      of `omnibus-core` is re-run against the v1.0 tag — only tool
+      registrations over the Ф2.7/Ф2.8 traits and new capability constants,
+      no core-mechanism changes; `omnibus-contracts` moves by a minor
+      version (1.0.0 → 1.4.0, additive only: the two v1.5 trait modules
+      `AppLauncher` / `ProcessTelemetry` with their DTOs, six new capability
+      constants, and the `source` field on `PackageBrief`);
+      TTFM < 5 min re-confirmed on the reference platforms (the automatable
+      onboarding-test half; the VM half stays REQ-EXT).
+- [ ] Packaging channels are unchanged (same AUR/PPA/Debian repo/COPR
+      channels, minor version bump only); §3's signing and REQ-EXT rows
+      re-run as written — nothing about the v1.5 tool set changes the
+      channel work.
+
 ## References
 
-- Roadmap: `docs/development/omnibus-roadmap.md` (tasks 2.6.1–2.6.3)
+- Roadmap: `docs/development/omnibus-roadmap.md` (tasks 2.6.1–2.6.3; the
+  v1.5 delta of task 2.9.2)
 - Tiers, floors, reference versions: `specs/architecture/platform-matrix.md`
 - The seven gates: `specs/architecture/quality-gates.md`
 - Acceptance evidence for MS2: `docs/verification/ms2-acceptance.md`

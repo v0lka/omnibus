@@ -10,7 +10,8 @@ Omnibus is an agent contract for the operating system: the daemon `omnibusd`
 (Rust workspace, edition 2024, one static binary) gives AI agents a uniform,
 auditable, least-privilege MCP API over a desktop OS - services, packages,
 journal, a11y UI, files, clipboard, screenshots, notifications, knowledge
-bases, network status. All inference lives in the MCP client; `omnibusd`
+bases, network status; v1.5 adds app launch and live process/system/power
+state. All inference lives in the MCP client; `omnibusd`
 performs zero model calls.
 
 Normative documents, in order of authority (rules in `specs/META.md`):
@@ -182,11 +183,12 @@ these is rejected in review, by design:
   `specs/architecture/principles.md`.
 - Why the seam is shaped this way: `specs/architecture/coupling-model.md`;
   the seven gates: `specs/architecture/quality-gates.md`.
-- Normative inventory: 14 SPI traits across 12 subsystems
-  (`specs/architecture/spi-registry.md`), 37 MCP tools (29 through v1.0;
-  eight more arrive with v1.5, Linux only)
-  (`specs/architecture/tool-registry.md`), 26 capability constants
-  (18 shipped; six arrive with v1.5, the two `intents.*` with MS3)
+- Normative inventory: 14 SPI traits across 12 subsystems (13 declared;
+  `AppLauncher` and `ProcessTelemetry` arrived with v1.5, `AppIntentsBridge`
+  stays JIT with MS3) (`specs/architecture/spi-registry.md`), 37 MCP tools
+  (29 through v1.0; eight more with v1.5, Linux only - all eight shipped;
+  the two `intent_*` with MS3) (`specs/architecture/tool-registry.md`),
+  26 capability constants (24 shipped; the two `intents.*` with MS3)
   (`specs/architecture/capability-model.md`), the 8 error codes
   (`specs/architecture/error-taxonomy.md`).
 - Boundaries: `specs/contracts/core-adapters.md`,

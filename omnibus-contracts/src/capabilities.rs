@@ -34,10 +34,32 @@ pub const FILES_SCOPE_WRITE: &str = "files.scope.write";
 pub const FILES_SCOPE_TCC: &str = "files.scope.tcc";
 pub const KB_PRESENT: &str = "kb.present";
 pub const NET_READ: &str = "net.read";
+/// The application inventory (v1.5, Linux; subsystem 11, task 2.7.1) behind
+/// `app.list`.
+pub const APP_READ: &str = "app.read";
+/// Application launch and open (v1.5, Linux; subsystem 11, task 2.7.1) behind
+/// `app.launch` / `app.open` — write actions, always behind an out-of-band
+/// grant; there is no runtime consent flow.
+pub const APP_LAUNCH: &str = "app.launch";
+/// The process and telemetry inventory (v1.5, Linux; subsystem 12, task 2.8.1)
+/// behind `ps.list` / `ps.info` — reads, audited.
+pub const PS_READ: &str = "ps.read";
+/// Process signaling (v1.5, Linux; subsystem 12, task 2.8.1) behind `ps.signal`
+/// — a write action, always behind an out-of-band grant; PID 1 and
+/// systemd-unit processes stay outside its reach.
+pub const PS_SIGNAL: &str = "ps.signal";
+/// System load statistics (v1.5, Linux; subsystem 12, task 2.8.1) behind
+/// `sys.stats` — reads, audited.
+pub const SYS_READ: &str = "sys.read";
+/// Power status (v1.5, Linux; subsystem 12, task 2.8.1) behind `power.status`
+/// — hidden on a machine without UPower/battery (R7: the machine is never
+/// promised what it lacks).
+pub const POWER_READ: &str = "power.read";
 
 /// The closed §7.1 registry, in roadmap order. The registry is closed over the
-/// roadmap task list; new capabilities enter only additively (minor contract version).
-pub const ALL: [&str; 18] = [
+/// roadmap task list; new capabilities enter only additively (minor contract
+/// version) as their tasks ship them.
+pub const ALL: [&str; 24] = [
     DESKTOP_TREE,
     DESKTOP_WRITE_TYPED,
     JOURNAL_PERSISTENT,
@@ -56,6 +78,12 @@ pub const ALL: [&str; 18] = [
     FILES_SCOPE_TCC,
     KB_PRESENT,
     NET_READ,
+    APP_READ,
+    APP_LAUNCH,
+    PS_READ,
+    PS_SIGNAL,
+    SYS_READ,
+    POWER_READ,
 ];
 
 /// Capability status as reported by the registry
@@ -137,7 +165,7 @@ mod tests {
         for pair in sorted.windows(2) {
             assert_ne!(pair[0], pair[1], "duplicate capability constant");
         }
-        assert_eq!(ALL.len(), 18, "registry is closed over the §7.1 list");
+        assert_eq!(ALL.len(), 24, "registry is closed over the §7.1 list");
     }
 
     #[test]

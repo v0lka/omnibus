@@ -8,14 +8,15 @@ process list, per-PID snapshots, system load statistics, and power status. Its g
 
 ## Key Files
 
-- `omnibus-contracts/src/spi/process-telemetry.rs` (planned) - the `ProcessTelemetry` trait,
-  declared just-in-time with its first implementation (task 2.8.1)
-- `omnibus-contracts/src/suite/` - the `process_telemetry_suite` contract-suite family (planned
-  with task 2.8.1), including negative cases (a nonexistent PID yields a contract error, never a
-  panic)
-- `omnibus-adapter-proc/src/` (planned) - Linux read provider: `/proc`, sysfs, UPower over D-Bus
+- `omnibus-contracts/src/spi/process-telemetry.rs` - the `ProcessTelemetry` trait, declared
+  just-in-time with its first implementation (task 2.8.1)
+- `omnibus-contracts/src/suite/` - the `process_telemetry_suite` contract-suite family, including
+  negative cases (a nonexistent PID yields a contract error, never a panic)
+- `omnibus-adapter-proc/tests/contract_suite.rs` - the suite binder: the live `/proc` stand plus
+  a synthetic 300+-process fixture stand (task 2.8.2)
+- `omnibus-adapter-proc/src/` - Linux read provider: `/proc`, sysfs, UPower over D-Bus
   (task 2.8.2)
-- `omnibus-adapter-proc/src/write.rs` (planned) - the `ps.signal` write path (task 2.8.3);
+- `omnibus-adapter-proc/src/write.rs` - the `ps.signal` write path (task 2.8.3);
   write-scope gating lives in the core
 
 ## Capability and Tools

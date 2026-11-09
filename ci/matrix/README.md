@@ -32,6 +32,16 @@ python3 ci/matrix/to_json.py < ci/matrix/t2.yml   # the exact JSON CI consumes
 `cargo build --workspace` → `cargo test --workspace` (the contract suite,
 R2) → `ci/smoke/run-demos.sh` (honest SKIPs when a backend is absent).
 
+The smoke program is the five pitch demos of roadmap 1.8.2 plus demo5
+(roadmap 2.9.2): the closed loop `app.launch` (grant) → `ps.list` observes
+the transient unit → `journal_query` reads its output → `ps.signal` (grant)
+terminates it. The loop's granted half needs a live systemd user manager
+(`/usr/bin/systemd-run` answering, the adapter binder's gate): reference
+containers have none, so there the demo passes on the no-grant refusal legs
+plus an honest SKIP of the granted half; the full loop is the real-session
+contract exercised on the T1 legs (Arch/Manjaro sessions, the Manjaro VM
+track) and the release-runbook machines (docs/release-checklist.md §6).
+
 ## The two honesty rules
 
 - **`package-install` is always `req-ext`.** Installing the native package

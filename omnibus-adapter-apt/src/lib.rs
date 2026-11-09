@@ -447,6 +447,7 @@ fn parse_installed_table(stdout: &[u8]) -> Vec<PackageBrief> {
                     version: String::from(version.trim()),
                     description: None,
                     repo: None,
+                    source: omnibus_contracts::dto::packages::PackageSource::Native,
                 }
             })
         })
@@ -567,6 +568,7 @@ fn parse_search_lines(stdout: &[u8], limit: Option<u32>) -> Vec<PackageBrief> {
             version: String::new(),
             description: description.map(String::from),
             repo: None,
+            source: omnibus_contracts::dto::packages::PackageSource::Native,
         });
     }
     out

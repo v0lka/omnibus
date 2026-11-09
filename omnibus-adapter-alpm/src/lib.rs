@@ -553,6 +553,7 @@ fn brief_of(pkg: &Package, repo: Option<&str>) -> PackageBrief {
         version: pkg.version().to_string(),
         description: pkg.desc().map(String::from),
         repo: repo.map(String::from),
+        source: omnibus_contracts::dto::packages::PackageSource::Native,
     }
 }
 

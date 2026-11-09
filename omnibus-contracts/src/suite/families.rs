@@ -1,5 +1,6 @@
 //! `ServiceManager`, `PackageManager`, `ScreenCapture`, `Notify`, `FileScope`,
-//! `KnowledgeBase`, `PlatformProbe`, `NetworkStatus`, `AuditSink` contract suites.
+//! `KnowledgeBase`, `PlatformProbe`, `NetworkStatus`, `AppLauncher`,
+//! `ProcessTelemetry`, `AuditSink` contract suites.
 //! Kept in one module per family below; each follows the same fixture pattern as
 //! the Journal suite (fixture describes configured backend state, harness asserts).
 
@@ -719,6 +720,699 @@ pub mod net {
         }
         drop(n);
         out
+    }
+}
+
+pub mod app_launcher {
+    //! AppLauncher suite: inventory read, write actions behind the grant
+    //! ladder (launch/open), the launch → observe unit handle.
+
+    use super::*;
+    use crate::dto::app_launcher::{AppSpec, OpenRequest};
+    use crate::spi::app_launcher::AppLauncher;
+
+    /// The backend state the implementation was configured with. The
+    /// fixture-free [`app_launcher_suite`] cannot verify a known application;
+    /// binders that configure one must bind [`app_launcher_suite_with_fixture`].
+    #[derive(Debug, Clone, Default)]
+    pub struct AppLauncherFixture {
+        /// An application the backend reports in `list` and can `launch`
+        /// (the closed-loop stand of task 2.7.2 binds a test `.desktop` app).
+        pub known_app: String,
+        /// A target (URI or path) the backend can `open`; when empty the
+        /// open gate is skipped honestly (a stand without an opener).
+        pub openable_target: String,
+    }
+
+    async fn app_launcher_core<F>(make: &F) -> SuiteReport
+    where
+        F: Fn() -> Box<dyn AppLauncher> + Send + Sync,
+    {
+        let mut out = SuiteReport::default();
+        {
+            let a = make();
+            check_report_shape(&a.report(), &mut out);
+        }
+        let a = make();
+        let list = a.list().await;
+        match list {
+            Ok(apps) => out.check(
+                "entries carry an app_id and a name",
+                apps.iter()
+                    .all(|app| !app.app_id.is_empty() && !app.name.is_empty()),
+            ),
+            Err(e) => out.failed.push(format!("  list failed: {e}")),
+        }
+        let missing = a
+            .launch(AppSpec {
+                app_id: String::from(SENTINEL_MISSING),
+                // Metacharacters are typed data crossing the SPI — never shell
+                // syntax; the sentinel must still answer the configured error.
+                args: vec![String::from("--flag;|`")],
+            })
+            .await;
+        out.check(
+            "unknown app is a contract error",
+            matches!(
+                missing,
+                Err(ContractError::NativeFailure { .. }
+                    | ContractError::Unsupported { .. }
+                    | ContractError::AdapterUnavailable)
+            ),
+        );
+        let slow = a
+            .launch(AppSpec {
+                app_id: String::from(SENTINEL_SLOW),
+                args: vec![],
+            })
+            .await;
+        out.check(
+            "slow launch maps to TimeoutError",
+            matches!(slow, Err(ContractError::TimeoutError)),
+        );
+        let denied = a
+            .launch(AppSpec {
+                app_id: String::from(SENTINEL_POISON),
+                args: vec![],
+            })
+            .await;
+        out.check(
+            "launch without the grant is a contract error",
+            matches!(
+                denied,
+                Err(ContractError::NativeFailure { .. } | ContractError::ScopeDenied)
+            ),
+        );
+        let open_slow = a
+            .open(OpenRequest {
+                target: String::from(SENTINEL_SLOW),
+            })
+            .await;
+        out.check(
+            "slow open maps to TimeoutError",
+            matches!(open_slow, Err(ContractError::TimeoutError)),
+        );
+        let open_denied = a
+            .open(OpenRequest {
+                target: String::from(SENTINEL_POISON),
+            })
+            .await;
+        out.check(
+            "open without the grant is a contract error",
+            matches!(
+                open_denied,
+                Err(ContractError::NativeFailure { .. } | ContractError::ScopeDenied)
+            ),
+        );
+        drop(a);
+        out
+    }
+
+    /// Runs the fixture-free `AppLauncher` behavioral set against `make`.
+    ///
+    /// Fixture-free by signature and by honesty: no application exists on
+    /// every machine, so this entry point cannot gate a known app. Binders
+    /// that configure the state the fixture prescribes must bind
+    /// [`app_launcher_suite_with_fixture`], which gates it for real.
+    pub async fn app_launcher_suite<F>(make: F) -> SuiteReport
+    where
+        F: Fn() -> Box<dyn AppLauncher> + Send + Sync,
+    {
+        app_launcher_core(&make).await
+    }
+
+    /// [`app_launcher_suite`] plus the fixture gates: the declared known app
+    /// is listed, `launch` of it succeeds and names the transient user unit
+    /// (the observation join key), and — when `openable_target` is declared —
+    /// `open` of it succeeds. A fixture without a known app fails loudly
+    /// instead of silently skipping the gates.
+    pub async fn app_launcher_suite_with_fixture<F>(make: F, fx: AppLauncherFixture) -> SuiteReport
+    where
+        F: Fn() -> Box<dyn AppLauncher> + Send + Sync,
+    {
+        let mut out = app_launcher_core(&make).await;
+        if fx.known_app.is_empty() {
+            out.check("fixture declares a known app", false);
+            return out;
+        }
+        let a = make();
+        let list = a.list().await;
+        match list {
+            Ok(apps) => out.check(
+                "fixture known app is listed",
+                apps.iter().any(|app| app.app_id == fx.known_app),
+            ),
+            Err(e) => out.failed.push(format!("  fixture list failed: {e}")),
+        }
+        let launched = a
+            .launch(AppSpec {
+                app_id: fx.known_app.clone(),
+                args: vec![],
+            })
+            .await;
+        match launched {
+            Ok(unit) => out.check(
+                "launch names the transient unit",
+                !unit.unit_name.is_empty(),
+            ),
+            Err(e) => out.failed.push(format!("  fixture launch failed: {e}")),
+        }
+        if !fx.openable_target.is_empty() {
+            let opened = a
+                .open(OpenRequest {
+                    target: fx.openable_target.clone(),
+                })
+                .await;
+            match opened {
+                Ok(()) => out.check("open succeeds on the declared target", true),
+                Err(e) => out.failed.push(format!("  fixture open failed: {e}")),
+            }
+        }
+        drop(a);
+        out
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::dto::app_launcher::{AppEntry, LaunchOutcome};
+        use crate::dto::probe::AdapterReport;
+
+        struct FakeLauncher;
+
+        #[async_trait::async_trait]
+        impl AppLauncher for FakeLauncher {
+            fn report(&self) -> AdapterReport {
+                AdapterReport {
+                    adapter: String::from("fake-launch"),
+                    subsystem: String::from("app-launch"),
+                    contract_version: String::from(crate::version::CONTRACT_VERSION),
+                    capabilities: vec![],
+                    notes: vec![],
+                }
+            }
+            async fn list(&self) -> Result<Vec<AppEntry>, ContractError> {
+                Ok(vec![AppEntry {
+                    app_id: String::from("suite-app.desktop"),
+                    name: String::from("Suite App"),
+                    exec: String::from("suite-app"),
+                    icon: None,
+                    no_display: false,
+                }])
+            }
+            async fn launch(&self, spec: AppSpec) -> Result<LaunchOutcome, ContractError> {
+                match spec.app_id.as_str() {
+                    // The typed arg list is data; the sentinel mapping does
+                    // not depend on it (no shell anywhere to interpret it).
+                    s if s == SENTINEL_MISSING => Err(ContractError::NativeFailure {
+                        code: 1,
+                        payload: String::from("no such application"),
+                    }),
+                    s if s == SENTINEL_SLOW => Err(ContractError::TimeoutError),
+                    s if s == SENTINEL_POISON => Err(ContractError::ScopeDenied),
+                    app_id => Ok(LaunchOutcome {
+                        unit_name: format!("app-{app_id}.service"),
+                    }),
+                }
+            }
+            async fn open(&self, request: OpenRequest) -> Result<(), ContractError> {
+                match request.target.as_str() {
+                    t if t == SENTINEL_SLOW => Err(ContractError::TimeoutError),
+                    t if t == SENTINEL_POISON => Err(ContractError::ScopeDenied),
+                    _ => Ok(()),
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn fixture_suite_runs_green_against_the_fake() {
+            let fx = AppLauncherFixture {
+                known_app: String::from("suite-app.desktop"),
+                openable_target: String::from("https://suite.invalid/"),
+            };
+            let report = app_launcher_suite_with_fixture(
+                || Box::new(FakeLauncher) as Box<dyn AppLauncher>,
+                fx,
+            )
+            .await;
+            assert!(report.is_clean(), "{report}");
+        }
+
+        #[tokio::test]
+        async fn fixture_suite_fails_when_the_known_app_is_missing() {
+            struct NoKnownApp;
+            #[async_trait::async_trait]
+            impl AppLauncher for NoKnownApp {
+                fn report(&self) -> AdapterReport {
+                    AdapterReport {
+                        adapter: String::from("fake-launch-broken"),
+                        subsystem: String::from("app-launch"),
+                        contract_version: String::from(crate::version::CONTRACT_VERSION),
+                        capabilities: vec![],
+                        notes: vec![],
+                    }
+                }
+                async fn list(&self) -> Result<Vec<AppEntry>, ContractError> {
+                    Ok(vec![])
+                }
+                async fn launch(&self, _spec: AppSpec) -> Result<LaunchOutcome, ContractError> {
+                    Err(ContractError::NativeFailure {
+                        code: 1,
+                        payload: String::from("no such application"),
+                    })
+                }
+                async fn open(&self, _request: OpenRequest) -> Result<(), ContractError> {
+                    Err(ContractError::ScopeDenied)
+                }
+            }
+            let fx = AppLauncherFixture {
+                known_app: String::from("suite-app.desktop"),
+                openable_target: String::new(),
+            };
+            let report = app_launcher_suite_with_fixture(
+                || Box::new(NoKnownApp) as Box<dyn AppLauncher>,
+                fx,
+            )
+            .await;
+            assert!(!report.is_clean(), "{report}");
+        }
+    }
+}
+
+pub mod process_telemetry {
+    //! ProcessTelemetry suite: the read ladder (`list`, `info`, `sys_stats`,
+    //! `power_status`) and the granted write (`signal`), with the negative
+    //! cases the domain mandates: a nonexistent pid yields a contract error,
+    //! never a panic, and PID 1 / systemd-unit processes stay outside every
+    //! operation (specs/domains/process-telemetry.md Invariants).
+
+    use super::*;
+    use crate::dto::process_telemetry::{ProcessListQuery, Signal, SignalRequest};
+    use crate::spi::process_telemetry::ProcessTelemetry;
+
+    /// Sentinel pids the binder maps to configured failure injections. They
+    /// sit beyond every Linux `pid_max` (≤ 2^22), so real backends answer
+    /// them as nonexistent; the shared [`super::SENTINEL_*`] strings cannot
+    /// address processes — pids are numbers, not names.
+    pub const SENTINEL_PID_MISSING: u32 = 2_000_000_000;
+    pub const SENTINEL_PID_SLOW: u32 = 2_000_000_001;
+    /// The write without its grant (the core denies scope before the adapter
+    /// runs; a stand binds this pid to its configured denial injection).
+    pub const SENTINEL_PID_POISON: u32 = 2_000_000_002;
+
+    /// The backend state the implementation was configured with. The
+    /// fixture-free [`process_telemetry_suite`] cannot verify a known
+    /// process; binders that configure one must bind
+    /// [`process_telemetry_suite_with_fixture`].
+    #[derive(Debug, Clone, Default)]
+    pub struct ProcessTelemetryFixture {
+        /// A pid the backend lists, snapshots in `info`, and signals
+        /// successfully (the integration stand binds a test process with the
+        /// `ps.signal` write grant wired; task 2.8.3).
+        pub known_pid: u32,
+    }
+
+    async fn process_telemetry_core<F>(make: &F) -> SuiteReport
+    where
+        F: Fn() -> Box<dyn ProcessTelemetry> + Send + Sync,
+    {
+        let mut out = SuiteReport::default();
+        {
+            let a = make();
+            check_report_shape(&a.report(), &mut out);
+        }
+        let a = make();
+        let list = a
+            .list(ProcessListQuery {
+                name_contains: None,
+                limit: None,
+            })
+            .await;
+        match list {
+            Ok(entries) => out.check(
+                "entries carry a pid and a name, never pid 0/1",
+                entries.iter().all(|e| e.pid > 1 && !e.name.is_empty()),
+            ),
+            Err(e) => out.failed.push(format!("  list failed: {e}")),
+        }
+        // The mandated negative case: a nonexistent pid is a contract error,
+        // never a panic (roadmap 2.8.1 AC).
+        let missing_info = a.info(SENTINEL_PID_MISSING).await;
+        out.check(
+            "nonexistent pid is a contract error (info)",
+            matches!(
+                missing_info,
+                Err(ContractError::NativeFailure { .. }
+                    | ContractError::ElementStale
+                    | ContractError::Unsupported { .. })
+            ),
+        );
+        // PID 1 never answers info: services are addressed through svc_*.
+        let init_info = a.info(1).await;
+        out.check("pid 1 stays outside info", init_info.is_err());
+        let stats = a.sys_stats().await;
+        match stats {
+            Ok(stats) => out.check(
+                "sys_stats carries finite load averages and sane memory",
+                stats.load_avg_1m.is_finite()
+                    && stats.load_avg_5m.is_finite()
+                    && stats.load_avg_15m.is_finite()
+                    && stats.mem_used_bytes.0 <= stats.mem_total_bytes.0,
+            ),
+            Err(e) => out.failed.push(format!("  sys_stats failed: {e}")),
+        }
+        // The R3 ladder: without UPower/battery the tool is hidden, so the
+        // honest answers are a report or CapabilityRequired — nothing else.
+        let power = a.power_status().await;
+        out.check(
+            "power_status answers a report or CapabilityRequired",
+            matches!(power, Ok(_) | Err(ContractError::CapabilityRequired)),
+        );
+        let missing_signal = a
+            .signal(SignalRequest {
+                pid: SENTINEL_PID_MISSING,
+                signal: Signal::Term,
+            })
+            .await;
+        out.check(
+            "nonexistent pid is a contract error (signal)",
+            matches!(
+                missing_signal,
+                Err(ContractError::NativeFailure { .. }
+                    | ContractError::ElementStale
+                    | ContractError::Unsupported { .. })
+            ),
+        );
+        // The domain invariant: a signal aimed at PID 1 answers Unsupported
+        // (with the hint to the service tools), never is delivered.
+        let init_signal = a
+            .signal(SignalRequest {
+                pid: 1,
+                signal: Signal::Term,
+            })
+            .await;
+        out.check(
+            "pid 1 signal answers Unsupported (svc_* hint)",
+            matches!(init_signal, Err(ContractError::Unsupported { .. })),
+        );
+        let slow = a
+            .signal(SignalRequest {
+                pid: SENTINEL_PID_SLOW,
+                signal: Signal::Term,
+            })
+            .await;
+        out.check(
+            "slow signal maps to TimeoutError",
+            matches!(slow, Err(ContractError::TimeoutError)),
+        );
+        let denied = a
+            .signal(SignalRequest {
+                pid: SENTINEL_PID_POISON,
+                signal: Signal::Term,
+            })
+            .await;
+        out.check(
+            "signal without the grant is a contract error",
+            matches!(
+                denied,
+                Err(ContractError::NativeFailure { .. } | ContractError::ScopeDenied)
+            ),
+        );
+        drop(a);
+        out
+    }
+
+    /// Runs the fixture-free `ProcessTelemetry` behavioral set against `make`.
+    ///
+    /// Fixture-free by signature and by honesty: no process exists on every
+    /// machine, so this entry point cannot gate a known pid. Binders that
+    /// configure the state the fixture prescribes must bind
+    /// [`process_telemetry_suite_with_fixture`], which gates it for real.
+    pub async fn process_telemetry_suite<F>(make: F) -> SuiteReport
+    where
+        F: Fn() -> Box<dyn ProcessTelemetry> + Send + Sync,
+    {
+        process_telemetry_core(&make).await
+    }
+
+    /// [`process_telemetry_suite`] plus the fixture gates: the declared known
+    /// pid is listed, `info` snapshots it consistently, and `signal` with the
+    /// closed-enum TERM succeeds (the stand has the `ps.signal` grant wired).
+    /// A fixture without a signalable pid fails loudly instead of silently
+    /// skipping the gates.
+    pub async fn process_telemetry_suite_with_fixture<F>(
+        make: F,
+        fx: ProcessTelemetryFixture,
+    ) -> SuiteReport
+    where
+        F: Fn() -> Box<dyn ProcessTelemetry> + Send + Sync,
+    {
+        let mut out = process_telemetry_core(&make).await;
+        if fx.known_pid <= 1 {
+            out.check("fixture declares a known pid (pid > 1)", false);
+            return out;
+        }
+        let a = make();
+        let list = a
+            .list(ProcessListQuery {
+                name_contains: None,
+                limit: None,
+            })
+            .await;
+        match list {
+            Ok(entries) => out.check(
+                "fixture known pid is listed",
+                entries.iter().any(|e| e.pid == fx.known_pid),
+            ),
+            Err(e) => out.failed.push(format!("  fixture list failed: {e}")),
+        }
+        let info = a.info(fx.known_pid).await;
+        match info {
+            Ok(snapshot) => out.check(
+                "info snapshots the known pid consistently",
+                snapshot.pid == fx.known_pid && !snapshot.name.is_empty(),
+            ),
+            Err(e) => out.failed.push(format!("  fixture info failed: {e}")),
+        }
+        let signalled = a
+            .signal(SignalRequest {
+                pid: fx.known_pid,
+                signal: Signal::Term,
+            })
+            .await;
+        match signalled {
+            Ok(()) => out.check("signal delivers the closed-enum signal", true),
+            Err(e) => out.failed.push(format!("  fixture signal failed: {e}")),
+        }
+        drop(a);
+        out
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::dto::probe::AdapterReport;
+        use crate::dto::process_telemetry::{PowerStatus, ProcessEntry, ProcessSnapshot, SysStats};
+        use crate::dto::{Bytes, Milliseconds, Percent, Seconds};
+
+        fn entry(pid: u32, name: &str) -> ProcessEntry {
+            ProcessEntry {
+                pid,
+                name: String::from(name),
+                state: String::from("S"),
+                cpu_percent: Percent(1),
+                rss_bytes: Bytes(4096),
+                cgroup: None,
+            }
+        }
+
+        fn snapshot(pid: u32, name: &str) -> ProcessSnapshot {
+            ProcessSnapshot {
+                pid,
+                name: String::from(name),
+                state: String::from("S"),
+                cpu_percent: Percent(1),
+                rss_bytes: Bytes(4096),
+                cgroup: None,
+                command_line: Some(String::from("suite-proc --idle")),
+                start_time_epoch_ms: Milliseconds(0),
+            }
+        }
+
+        struct FakeProc;
+
+        #[async_trait::async_trait]
+        impl ProcessTelemetry for FakeProc {
+            fn report(&self) -> AdapterReport {
+                AdapterReport {
+                    adapter: String::from("fake-proc"),
+                    subsystem: String::from("process-telemetry"),
+                    contract_version: String::from(crate::version::CONTRACT_VERSION),
+                    capabilities: vec![],
+                    notes: vec![],
+                }
+            }
+            async fn list(
+                &self,
+                _query: ProcessListQuery,
+            ) -> Result<Vec<ProcessEntry>, ContractError> {
+                Ok(vec![entry(4242, "suite-proc")])
+            }
+            async fn info(&self, pid: u32) -> Result<ProcessSnapshot, ContractError> {
+                match pid {
+                    p if p == SENTINEL_PID_MISSING => Err(ContractError::NativeFailure {
+                        code: 2,
+                        payload: String::from("no such process"),
+                    }),
+                    p if p == SENTINEL_PID_SLOW => Err(ContractError::TimeoutError),
+                    // PID 1 stays outside: services go through svc_*.
+                    1 => Err(ContractError::Unsupported {
+                        reason: String::from("systemd-unit processes are addressed via svc_*"),
+                    }),
+                    pid => Ok(snapshot(pid, "suite-proc")),
+                }
+            }
+            async fn sys_stats(&self) -> Result<SysStats, ContractError> {
+                Ok(SysStats {
+                    cpu_percent: Percent(12),
+                    load_avg_1m: 0.42,
+                    load_avg_5m: 0.4,
+                    load_avg_15m: 0.36,
+                    mem_total_bytes: Bytes(8_000_000_000),
+                    mem_used_bytes: Bytes(4_000_000_000),
+                    swap_total_bytes: Bytes(2_000_000_000),
+                    swap_used_bytes: Bytes(0),
+                    uptime_seconds: Seconds(1_000),
+                })
+            }
+            async fn power_status(&self) -> Result<PowerStatus, ContractError> {
+                Ok(PowerStatus {
+                    on_battery: false,
+                    battery_percent: Some(Percent(88)),
+                    seconds_until_empty: None,
+                    seconds_until_full: Some(Seconds(1_800)),
+                })
+            }
+            async fn signal(&self, request: SignalRequest) -> Result<(), ContractError> {
+                match request.pid {
+                    p if p == SENTINEL_PID_MISSING => Err(ContractError::NativeFailure {
+                        code: 3,
+                        payload: String::from("no such process"),
+                    }),
+                    p if p == SENTINEL_PID_SLOW => Err(ContractError::TimeoutError),
+                    p if p == SENTINEL_PID_POISON => Err(ContractError::ScopeDenied),
+                    // PID 1 stays outside: services go through svc_*.
+                    1 => Err(ContractError::Unsupported {
+                        reason: String::from("systemd-unit processes are addressed via svc_*"),
+                    }),
+                    _ => Ok(()),
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn fixture_suite_runs_green_against_the_fake() {
+            let fx = ProcessTelemetryFixture { known_pid: 4242 };
+            let report = process_telemetry_suite_with_fixture(
+                || Box::new(FakeProc) as Box<dyn ProcessTelemetry>,
+                fx,
+            )
+            .await;
+            assert!(report.is_clean(), "{report}");
+        }
+
+        /// The fixture-free negative control: the mandated case (a
+        /// nonexistent pid) is answered with contract errors and the report
+        /// stays clean — the suite must not need a live process to gate.
+        #[tokio::test]
+        async fn fixture_free_suite_gates_the_negative_pid_cases() {
+            let report =
+                process_telemetry_suite(|| Box::new(FakeProc) as Box<dyn ProcessTelemetry>).await;
+            assert!(report.is_clean(), "{report}");
+            assert!(
+                report
+                    .passed
+                    .iter()
+                    .any(|name| name.contains("nonexistent pid is a contract error")),
+                "the negative-pid gates ran: {report:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn fixture_suite_fails_when_the_known_pid_is_missing() {
+            struct NoKnownPid;
+            #[async_trait::async_trait]
+            impl ProcessTelemetry for NoKnownPid {
+                fn report(&self) -> AdapterReport {
+                    AdapterReport {
+                        adapter: String::from("fake-proc-broken"),
+                        subsystem: String::from("process-telemetry"),
+                        contract_version: String::from(crate::version::CONTRACT_VERSION),
+                        capabilities: vec![],
+                        notes: vec![],
+                    }
+                }
+                async fn list(
+                    &self,
+                    _query: ProcessListQuery,
+                ) -> Result<Vec<ProcessEntry>, ContractError> {
+                    Ok(vec![])
+                }
+                async fn info(&self, pid: u32) -> Result<ProcessSnapshot, ContractError> {
+                    match pid {
+                        p if p == SENTINEL_PID_MISSING => Err(ContractError::NativeFailure {
+                            code: 2,
+                            payload: String::from("no such process"),
+                        }),
+                        p if p == SENTINEL_PID_SLOW => Err(ContractError::TimeoutError),
+                        1 => Err(ContractError::Unsupported {
+                            reason: String::from("systemd-unit processes are addressed via svc_*"),
+                        }),
+                        pid => Ok(snapshot(pid, "suite-proc")),
+                    }
+                }
+                async fn sys_stats(&self) -> Result<SysStats, ContractError> {
+                    FakeProc.sys_stats().await
+                }
+                async fn power_status(&self) -> Result<PowerStatus, ContractError> {
+                    FakeProc.power_status().await
+                }
+                async fn signal(&self, request: SignalRequest) -> Result<(), ContractError> {
+                    FakeProc.signal(request).await
+                }
+            }
+            let fx = ProcessTelemetryFixture { known_pid: 4242 };
+            let report = process_telemetry_suite_with_fixture(
+                || Box::new(NoKnownPid) as Box<dyn ProcessTelemetry>,
+                fx,
+            )
+            .await;
+            assert!(!report.is_clean(), "{report}");
+            assert!(
+                report
+                    .failed
+                    .iter()
+                    .any(|name| name.contains("fixture known pid is listed")),
+                "the fixture gate, not the core gates, goes red: {report:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn empty_fixture_fails_loudly_instead_of_skipping_gates() {
+            let report = process_telemetry_suite_with_fixture(
+                || Box::new(FakeProc) as Box<dyn ProcessTelemetry>,
+                ProcessTelemetryFixture::default(),
+            )
+            .await;
+            assert!(!report.is_clean(), "{report}");
+            assert!(
+                report
+                    .failed
+                    .iter()
+                    .any(|name| name.contains("fixture declares a known pid")),
+                "the empty-fixture guard is the failure: {report:?}"
+            );
+        }
     }
 }
 

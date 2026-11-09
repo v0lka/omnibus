@@ -6,6 +6,13 @@
 #   demo3  "After the update"      — pkg_list/info -> pkg_undo honest refusals
 #   demo4  "From scratch"          — capabilities -> doctor -> KB -> honest
 #                                    install refusal (the assembly arc, no VM)
+#   demo5  "The closed loop"       — app.launch (grant) -> ps.list sees the
+#                                    process -> journal_query reads its
+#                                    output -> ps.signal (grant) terminates
+#                                    it (roadmap 2.9.2; the granted legs skip
+#                                    honestly without a live systemd user
+#                                    manager — reference CI containers get
+#                                    the refusal half)
 #
 # Safe on a developer machine: read-only by default, no system mutation, and
 # every demo exits 0 with "SKIP:" on stderr when a backend is honestly absent.
@@ -20,7 +27,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-DEMOS=(demo1-diagnosis demo2-forms demo3-undo demo4-from-scratch)
+DEMOS=(demo1-diagnosis demo2-forms demo3-undo demo4-from-scratch demo5-closed-loop)
 failed=()
 
 echo "== omnibus smoke demos (repo root: $REPO_ROOT) =="

@@ -1,4 +1,4 @@
-//! The MCP tool registry (specs/architecture/tool-registry.md): 24 domain tools
+//! The MCP tool registry (specs/architecture/tool-registry.md): 32 domain tools
 //! plus the three core tools. Every tool lives in the core and calls the trait,
 //! never the implementation. The list reflects the capability document of the
 //! current session's fresh probe; a hidden tool called by name returns
@@ -9,7 +9,9 @@ use omnibus_contracts::dto::desktop::{InvokeRequest, SetValueRequest, TreeSelect
 use omnibus_contracts::dto::files::{FileReadRequest, FileWriteRequest, PathQuery};
 use omnibus_contracts::dto::journal::{BootSelector, JournalQuery};
 use omnibus_contracts::dto::kb::{KbPageRequest, KbQuery};
-use omnibus_contracts::dto::packages::{PackageListRequest, PackageNameRequest};
+use omnibus_contracts::dto::packages::{
+    PackageBrief, PackageInfo, PackageListRequest, PackageNameRequest,
+};
 use omnibus_contracts::dto::portals::{ClipboardContent, NotifyRequest, ScreenshotRequest};
 use omnibus_contracts::dto::services::{ServiceActionRequest, ServiceFilter};
 use omnibus_contracts::errors::ContractError;
@@ -214,6 +216,53 @@ fn build_specs() -> Vec<ToolSpec> {
             KbPageRequest::schema(),
         ),
         ToolSpec::read(
+            join_tool("app", "list"),
+            "installed applications (.desktop inventory: id, name, exec, icon)",
+            serde_json::Value::Null.into_any(),
+        ),
+        ToolSpec::write(
+            join_tool("app", "launch"),
+            "start an application as a transient user unit (write grant required)",
+            omnibus_contracts::dto::app_launcher::AppSpec::schema(),
+            cap::APP_LAUNCH,
+            None,
+        ),
+        ToolSpec::write(
+            join_tool("app", "open"),
+            "open a URI or file with the associated application (write grant required)",
+            omnibus_contracts::dto::app_launcher::OpenRequest::schema(),
+            cap::APP_LAUNCH,
+            None,
+        ),
+        ToolSpec::read(
+            join_tool("ps", "list"),
+            "process inventory from /proc (pid, name, state, CPU, RSS, cgroup)",
+            omnibus_contracts::dto::process_telemetry::ProcessListQuery::schema(),
+        ),
+        ToolSpec::read(
+            join_tool("ps", "info"),
+            "one consistent per-PID snapshot",
+            omnibus_contracts::dto::process_telemetry::PidRequest::schema(),
+        ),
+        ToolSpec::read(
+            join_tool("sys", "stats"),
+            "system load: CPU busy percent, load averages, memory and swap",
+            serde_json::Value::Null.into_any(),
+        ),
+        ToolSpec::read(
+            join_tool("power", "status"),
+            "battery and supply facts (hidden without UPower + a battery)",
+            serde_json::Value::Null.into_any(),
+        ),
+        ToolSpec::write(
+            join_tool("ps", "signal"),
+            "send one closed-enum signal to a pid from ps.list (write grant required; \
+             PID 1 and systemd-unit processes are excluded)",
+            omnibus_contracts::dto::process_telemetry::SignalRequest::schema(),
+            cap::PS_SIGNAL,
+            None,
+        ),
+        ToolSpec::read(
             String::from("capabilities"),
             "machine-readable truth about this machine",
             serde_json::Value::Null.into_any(),
@@ -245,16 +294,31 @@ impl SchemaFromValue for serde_json::Value {
 /// The subsystem component a tool's floor check runs against. The systemd floor
 /// gates only the services tools (platform-matrix.md keeps journal and package
 /// reads below the floor); `journal` and `none` have no declared floor row, so
-/// `floor_met` passes trivially for them.
+/// `floor_met` passes trivially for them. `app.launch` rides the same systemd
+/// floor (platform-matrix.md: `systemd-run` ships with systemd itself — no
+/// separate floor), while `app.list` and `app.open` are presence-based (the
+/// `.desktop` directories and the `xdg-open` binary) with no floor row.
 fn component_for_tool(tool: &str) -> &'static str {
-    if tool.starts_with("desktop") {
+    let (alaunch, alist, aopen) = (
+        join_tool("app", "launch"),
+        join_tool("app", "list"),
+        join_tool("app", "open"),
+    );
+    if tool == alaunch.as_str() {
+        "systemd"
+    } else if tool == alist.as_str() || tool == aopen.as_str() {
+        "none"
+    } else if tool.starts_with("desktop") {
         "at-spi2"
     } else if tool.starts_with("svc_") {
         "systemd"
     } else if tool.starts_with("journal") {
         "journal"
     } else {
-        // pkg_* and everything else: no declared floor row (trivially met).
+        // pkg_*, the v1.5 dotted tools (app.*, ps.*, sys.stats, power.status)
+        // and everything else: no declared floor row (trivially met). The
+        // process reads carry no version floor at all — /proc and sysfs
+        // activate on every target Linux platform.
         "none"
     }
 }
@@ -315,10 +379,31 @@ pub fn gate(core: &crate::Core, tool: &str) -> GateDecision {
         return GateDecision::Run; // core tools are ungated
     };
     let component = component_for_tool(tool);
-    match core
+    let ladder = core
         .caps
-        .ladder(capability, component, core.grants.has_grant(capability))
+        .ladder(capability, component, core.grants.has_grant(capability));
+    // The `app.open` arm is presence-based on top of the shared `app.launch`
+    // capability (specs/domains/app-launch.md Degradation, platform-matrix.md):
+    // `app.launch` and `app.open` carry one registry constant, so the ladder
+    // cannot tell a missing opener from a missing launch backend. The probe's
+    // `backends_present` row is the session's install-time fact — without it
+    // the tool hides (rung 2), the adapter's `app.launch` fact note carries
+    // the reason into `capabilities()`, and a direct call answers
+    // `CapabilityRequired`. The refinement applies only on a rung that would
+    // otherwise run: floor and provider absence keep their own (more severe)
+    // answers.
+    let app_open = join_tool("app", "open");
+    if tool == app_open.as_str()
+        && matches!(ladder, LadderState::Available | LadderState::Degraded)
+        && !core
+            .platform
+            .backends_present
+            .iter()
+            .any(|backend| backend == "xdg-open")
     {
+        return GateDecision::Hidden;
+    }
+    match ladder {
         LadderState::Available | LadderState::Degraded => {
             if let Some(spec) = all_specs().iter().find(|s| s.name == tool)
                 && let Some(grant_key) = spec.grant_key
@@ -668,7 +753,15 @@ fn adapter_name(core: &crate::Core, tool: &str) -> String {
     } else if tool.starts_with("svc_") {
         core.registry.services.as_ref().map(|a| a.report().adapter)
     } else if tool.starts_with("pkg_") {
-        core.registry.packages.as_ref().map(|a| a.report().adapter)
+        // The aggregated packages subsystem (v1.5): the native manager is the
+        // primary attribution; the inventory names itself when it is the only
+        // active adapter (timeout/refusal paths — a successful dispatch
+        // carries its exact adapter in DispatchOutcome).
+        core.registry
+            .packages
+            .as_ref()
+            .or(core.registry.packages_inventory.as_ref())
+            .map(|a| a.report().adapter)
     } else if tool.starts_with("clip") || tool == "screenshot" {
         core.registry.screen.as_ref().map(|a| a.report().adapter)
     } else if tool == "notify" {
@@ -679,12 +772,116 @@ fn adapter_name(core: &crate::Core, tool: &str) -> String {
         core.registry.kb.as_ref().map(|a| a.report().adapter)
     } else if tool == "net_status" {
         core.registry.net.as_ref().map(|a| a.report().adapter)
+    } else if tool.starts_with("app.") {
+        // The dotted app tool names are assembled (R4-CON); the prefix check
+        // keeps the mapping one line for app.list / app.launch / app.open.
+        core.registry
+            .app_launcher
+            .as_ref()
+            .map(|a| a.report().adapter)
+    } else if tool.starts_with("ps.") || tool.starts_with("sys.") || tool.starts_with("power.") {
+        // The process-telemetry dotted names, assembled (R4-CON): ps.list /
+        // ps.info / ps.signal / sys.stats / power.status share one slot.
+        core.registry
+            .process_telemetry
+            .as_ref()
+            .map(|a| a.report().adapter)
     } else if tool == "capabilities" {
         core.registry.probe.as_ref().map(|a| a.report().adapter)
     } else {
         None
     };
     subsystem.unwrap_or_else(|| String::from("core"))
+}
+
+/// The aggregated `pkg_list` (v1.5, roadmap 2.9.1, specs/domains/packages.md):
+/// the native manager's rows precede the inventory's, and the request limit
+/// truncates the merged output. Strict error policy: an error from either
+/// active adapter fails the whole call — a silently skipped half would make
+/// the inventory claim completeness it does not have. With only one slot
+/// active the output is exactly that adapter's, unchanged and undegraded (R7).
+/// Returns the merged list plus the audit attribution (the contributing
+/// adapters, joined with `+`; one adapter alone names itself).
+async fn aggregated_list(
+    core: &crate::Core,
+    request: PackageListRequest,
+) -> Result<(Vec<PackageBrief>, String), ContractError> {
+    let native = core.registry.packages.clone();
+    let inventory = core.registry.packages_inventory.clone();
+    if native.is_none() && inventory.is_none() {
+        return Err(ContractError::AdapterUnavailable);
+    }
+    // The two reads are independent and each adapter bounds its own work:
+    // running them concurrently keeps the merged wall clock at the slowest
+    // single call, never the sum.
+    let native_list = async {
+        match &native {
+            Some(a) => a.list(request.clone()).await,
+            None => Ok(Vec::new()),
+        }
+    };
+    let inventory_list = async {
+        match &inventory {
+            Some(a) => a.list(request.clone()).await,
+            None => Ok(Vec::new()),
+        }
+    };
+    let (native_rows, inventory_rows) = tokio::join!(native_list, inventory_list);
+    let mut merged = native_rows?;
+    merged.extend(inventory_rows?);
+    if let Some(limit) = request.limit {
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        merged.truncate(limit);
+    }
+    let attribution = match (native, inventory) {
+        (Some(native), Some(inventory)) => {
+            format!("{}+{}", native.report().adapter, inventory.report().adapter)
+        }
+        (Some(native), None) => native.report().adapter,
+        (None, Some(inventory)) => inventory.report().adapter,
+        (None, None) => unreachable!("both slots checked empty above"),
+    };
+    Ok((merged, attribution))
+}
+
+/// The aggregated `pkg_info` (v1.5): the native manager answers first — its
+/// metadata (dependencies, reverse dependencies, install reason) is the
+/// authoritative shape for native packages. A native package the native
+/// manager cannot name falls through to the inventory: a flatpak/snap-only
+/// package must be reachable, whatever the native error was. When nothing
+/// answers, the native error surfaces (the primary manager's failure is the
+/// honest answer; the inventory absence is plain absence, never a
+/// degradation). Attribution names the adapter that actually served the
+/// answer, so the audit trail tells a native lookup from an inventory lookup.
+async fn aggregated_info(
+    core: &crate::Core,
+    name: String,
+) -> Result<(PackageInfo, String), ContractError> {
+    let native = core.registry.packages.clone();
+    let inventory = core.registry.packages_inventory.clone();
+    if native.is_none() && inventory.is_none() {
+        return Err(ContractError::AdapterUnavailable);
+    }
+    if let Some(native) = &native {
+        match native.info(name.clone()).await {
+            Ok(info) => return Ok((info, native.report().adapter)),
+            Err(native_error) => {
+                if let Some(inventory) = &inventory {
+                    match inventory.info(name.clone()).await {
+                        Ok(info) => return Ok((info, inventory.report().adapter)),
+                        // Nothing answered: the native manager's error is the
+                        // answer (its lookup is the primary one).
+                        Err(_) => return Err(native_error),
+                    }
+                }
+                return Err(native_error);
+            }
+        }
+    }
+    // Native absent: the inventory alone answers.
+    let inventory = inventory.expect("both slots checked empty above");
+    let info = inventory.info(name).await?;
+    Ok((info, inventory.report().adapter))
 }
 
 /// The single-dispatch: route to the trait call on the activated slot.
@@ -841,21 +1038,19 @@ async fn dispatch_once(
         }
         "pkg_list" => {
             let request: PackageListRequest = parse_args(arguments)?;
-            let packages = slot!(packages);
-            let list = packages.list(request).await?;
+            let (list, adapter) = aggregated_list(core, request).await?;
             Ok(DispatchOutcome {
                 value: serde_json::to_value(&list).unwrap_or(serde_json::Value::Null),
-                adapter: packages.report().adapter,
+                adapter,
             })
         }
         "pkg_info" => {
             let request: PackageNameRequest = parse_args(arguments)?;
             let name = request.name;
-            let packages = slot!(packages);
-            let info = packages.info(name).await?;
+            let (info, adapter) = aggregated_info(core, name).await?;
             Ok(DispatchOutcome {
                 value: serde_json::to_value(&info).unwrap_or(serde_json::Value::Null),
-                adapter: packages.report().adapter,
+                adapter,
             })
         }
         "pkg_install" => {
@@ -928,6 +1123,78 @@ async fn dispatch_once(
             Ok(DispatchOutcome {
                 value: serde_json::to_value(&article).unwrap_or(serde_json::Value::Null),
                 adapter: kb.report().adapter,
+            })
+        }
+        t if t == join_tool("app", "list") => {
+            let app = slot!(app_launcher);
+            let entries = app.list().await?;
+            Ok(DispatchOutcome {
+                value: serde_json::to_value(&entries).unwrap_or(serde_json::Value::Null),
+                adapter: app.report().adapter,
+            })
+        }
+        t if t == join_tool("app", "launch") => {
+            let spec: omnibus_contracts::dto::app_launcher::AppSpec = parse_args(arguments)?;
+            let app = slot!(app_launcher);
+            let outcome = app.launch(spec).await?;
+            Ok(DispatchOutcome {
+                value: serde_json::to_value(&outcome).unwrap_or(serde_json::Value::Null),
+                adapter: app.report().adapter,
+            })
+        }
+        t if t == join_tool("app", "open") => {
+            let request: omnibus_contracts::dto::app_launcher::OpenRequest = parse_args(arguments)?;
+            let app = slot!(app_launcher);
+            app.open(request).await?;
+            Ok(DispatchOutcome {
+                value: serde_json::json!({ "opened": true }),
+                adapter: app.report().adapter,
+            })
+        }
+        t if t == join_tool("ps", "list") => {
+            let query: omnibus_contracts::dto::process_telemetry::ProcessListQuery =
+                parse_args(arguments)?;
+            let proc = slot!(process_telemetry);
+            let entries = proc.list(query).await?;
+            Ok(DispatchOutcome {
+                value: serde_json::to_value(&entries).unwrap_or(serde_json::Value::Null),
+                adapter: proc.report().adapter,
+            })
+        }
+        t if t == join_tool("ps", "info") => {
+            let request: omnibus_contracts::dto::process_telemetry::PidRequest =
+                parse_args(arguments)?;
+            let proc = slot!(process_telemetry);
+            let snapshot = proc.info(request.pid).await?;
+            Ok(DispatchOutcome {
+                value: serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null),
+                adapter: proc.report().adapter,
+            })
+        }
+        t if t == join_tool("sys", "stats") => {
+            let proc = slot!(process_telemetry);
+            let stats = proc.sys_stats().await?;
+            Ok(DispatchOutcome {
+                value: serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null),
+                adapter: proc.report().adapter,
+            })
+        }
+        t if t == join_tool("power", "status") => {
+            let proc = slot!(process_telemetry);
+            let status = proc.power_status().await?;
+            Ok(DispatchOutcome {
+                value: serde_json::to_value(&status).unwrap_or(serde_json::Value::Null),
+                adapter: proc.report().adapter,
+            })
+        }
+        t if t == join_tool("ps", "signal") => {
+            let request: omnibus_contracts::dto::process_telemetry::SignalRequest =
+                parse_args(arguments)?;
+            let proc = slot!(process_telemetry);
+            proc.signal(request).await?;
+            Ok(DispatchOutcome {
+                value: serde_json::json!({ "signalled": true }),
+                adapter: proc.report().adapter,
             })
         }
         "capabilities" => Ok(DispatchOutcome {
@@ -1087,8 +1354,9 @@ mod tests {
         let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names.len(),
-            27,
-            "24 domain + capabilities + session_info + doctor"
+            35,
+            "32 domain (24 + app.list/app.launch/app.open + ps.list/ps.info/\
+             sys.stats/power.status/ps.signal) + capabilities + session_info + doctor"
         );
         let mut sorted = names.clone();
         sorted.sort_unstable();
@@ -1099,6 +1367,26 @@ mod tests {
         assert!(
             names.contains(&join_tool("desktop", "tree").as_str()),
             "missing desktop.tree"
+        );
+        assert!(
+            names.contains(&join_tool("app", "list").as_str()),
+            "missing app.list"
+        );
+        assert!(
+            names.contains(&join_tool("ps", "list").as_str()),
+            "missing ps.list"
+        );
+        assert!(
+            names.contains(&join_tool("ps", "signal").as_str()),
+            "missing ps.signal"
+        );
+        assert!(
+            names.contains(&join_tool("sys", "stats").as_str()),
+            "missing sys.stats"
+        );
+        assert!(
+            names.contains(&join_tool("power", "status").as_str()),
+            "missing power.status"
         );
         for expected in ["svc_start", "pkg_undo", "fs_write", "net_status", "doctor"] {
             assert!(names.contains(&expected), "missing {expected}");
@@ -1120,6 +1408,14 @@ mod tests {
         assert_eq!(grant_of("svc_start"), Some(cap::SERVICE_WRITE));
         assert_eq!(grant_of("clip_write"), Some(cap::PORTAL_CLIPBOARD));
         assert_eq!(grant_of("notify"), Some(cap::PORTAL_NOTIFY));
+        assert_eq!(grant_of(&join_tool("app", "launch")), Some(cap::APP_LAUNCH));
+        assert_eq!(grant_of(&join_tool("app", "open")), Some(cap::APP_LAUNCH));
+        assert_eq!(grant_of(&join_tool("app", "list")), None);
+        assert_eq!(grant_of(&join_tool("ps", "signal")), Some(cap::PS_SIGNAL));
+        assert_eq!(grant_of(&join_tool("ps", "list")), None);
+        assert_eq!(grant_of(&join_tool("ps", "info")), None);
+        assert_eq!(grant_of(&join_tool("sys", "stats")), None);
+        assert_eq!(grant_of(&join_tool("power", "status")), None);
         assert_eq!(grant_of("journal_query"), None);
     }
 
@@ -1138,9 +1434,22 @@ mod tests {
     #[test]
     fn floor_components_follow_the_platform_matrix() {
         // The systemd floor gates only the services tools; journal and package
-        // reads stay available below it (platform-matrix.md).
+        // reads stay available below it (platform-matrix.md). app.launch rides
+        // the same floor (systemd-run ships with systemd); app.list and
+        // app.open are presence-based with no floor row.
         assert_eq!(component_for_tool("svc_start"), "systemd");
         assert_eq!(component_for_tool("svc_status"), "systemd");
+        assert_eq!(component_for_tool(&join_tool("app", "launch")), "systemd");
+        assert_eq!(component_for_tool(&join_tool("app", "list")), "none");
+        assert_eq!(component_for_tool(&join_tool("app", "open")), "none");
+        // The process-telemetry reads and write carry no floor row at all:
+        // /proc and sysfs activate on every target Linux platform
+        // (platform-matrix.md, specs/domains/process-telemetry.md).
+        assert_eq!(component_for_tool(&join_tool("ps", "list")), "none");
+        assert_eq!(component_for_tool(&join_tool("ps", "info")), "none");
+        assert_eq!(component_for_tool(&join_tool("ps", "signal")), "none");
+        assert_eq!(component_for_tool(&join_tool("sys", "stats")), "none");
+        assert_eq!(component_for_tool(&join_tool("power", "status")), "none");
         assert_eq!(component_for_tool("journal_query"), "journal");
         assert_eq!(component_for_tool("pkg_list"), "none");
         assert_eq!(component_for_tool("pkg_undo"), "none");
@@ -1193,6 +1502,24 @@ mod tests {
                 "fs_write" => parse_args::<FileWriteRequest>(&map).is_ok(),
                 "wiki_search" => parse_args::<KbQuery>(&map).is_ok(),
                 "wiki_page" => parse_args::<KbPageRequest>(&map).is_ok(),
+                t if t == join_tool("app", "launch") => {
+                    parse_args::<omnibus_contracts::dto::app_launcher::AppSpec>(&map).is_ok()
+                }
+                t if t == join_tool("app", "open") => {
+                    parse_args::<omnibus_contracts::dto::app_launcher::OpenRequest>(&map).is_ok()
+                }
+                t if t == join_tool("ps", "list") => {
+                    parse_args::<omnibus_contracts::dto::process_telemetry::ProcessListQuery>(&map)
+                        .is_ok()
+                }
+                t if t == join_tool("ps", "info") => {
+                    parse_args::<omnibus_contracts::dto::process_telemetry::PidRequest>(&map)
+                        .is_ok()
+                }
+                t if t == join_tool("ps", "signal") => {
+                    parse_args::<omnibus_contracts::dto::process_telemetry::SignalRequest>(&map)
+                        .is_ok()
+                }
                 other => panic!("unmapped tool {other}: extend the conformance table"),
             };
             assert!(

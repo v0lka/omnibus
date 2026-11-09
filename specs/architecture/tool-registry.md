@@ -2,8 +2,9 @@
 
 ## Context
 
-The complete normative list of 37 MCP tools (29 through v1.0; eight more arrive with v1.5, Linux
-only). Names and capability bindings are fixed here and mirror
+The complete normative list of 37 MCP tools (29 through v1.0; eight more with v1.5, Linux only —
+all eight shipped; the two `intent_*` tools stay MS3). Names and capability bindings are fixed
+here and mirror
 `omnibus-architecture.md` §5 and `omnibus-spec.md` §4. `[+scope]` means a write grant from the TOML
 manifest is required in addition to the capability. Core tools are marked (core).
 
