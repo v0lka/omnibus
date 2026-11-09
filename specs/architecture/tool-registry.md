@@ -2,7 +2,7 @@
 
 ## Context
 
-The complete normative list of 37 MCP tools (29 through v1.0; eight more with v1.5, Linux only —
+The complete normative list of 37 MCP tools (27 through v1.0; eight more with v1.5, Linux only —
 all eight shipped; the two `intent_*` tools stay MS3). Names and capability bindings are fixed
 here and mirror
 `omnibus-architecture.md` §5 and `omnibus-spec.md` §4. `[+scope]` means a write grant from the TOML
@@ -44,6 +44,11 @@ manifest is required in addition to the capability. Core tools are marked (core)
 (v1.5) `pkg_list` / `pkg_info` aggregate the native manager and the read-only flatpak/snap
 inventory; the source of every package is explicit in the DTO (`native` / `flatpak` / `snap`). Write
 tools for flatpak/snap sources are not declared.
+
+(v1.0) The `ServiceManager` ops `restart` / `enable` / `disable` stay trait-level
+(contract-suite coverage): the tool surface binds only `svc_start` / `svc_stop`, and an agent
+composes a restart as stop + start. Binding the remaining ops to tools is a registry change,
+never a hidden alias.
 
 ## Hiding Rule
 

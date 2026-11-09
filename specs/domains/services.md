@@ -31,7 +31,7 @@ svc_* tool --> ServiceManager trait --> provider
 - The systemd1 read path maps D-Bus error codes into `NativeFailure{code}` with the payload preserved; a nonexistent unit always yields a contract error, never a panic.
 - The write path never intercepts OS authorization: polkit rules apply as they are; launchd system-domain actions without root produce an honest contract error.
 - On macOS the core policy forbids raising system daemons from the session; the adapter serves the agent-visible LaunchAgent domain.
-- A restarted unit is verified to reach the active state under the core timeout policy.
+- The tool surface binds `svc_start`/`svc_stop` only: the `apply` ops `restart`/`enable`/`disable` stay trait-level (contract-suite coverage), and an agent composes a restart as stop + start; binding them to tools is a registry change. At the trait level, a restarted unit is verified to reach the active state under the core timeout policy.
 
 ## Degradation
 

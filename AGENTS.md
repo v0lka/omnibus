@@ -186,7 +186,7 @@ these is rejected in review, by design:
 - Normative inventory: 14 SPI traits across 12 subsystems (13 declared;
   `AppLauncher` and `ProcessTelemetry` arrived with v1.5, `AppIntentsBridge`
   stays JIT with MS3) (`specs/architecture/spi-registry.md`), 37 MCP tools
-  (29 through v1.0; eight more with v1.5, Linux only - all eight shipped;
+  (27 through v1.0; eight more with v1.5, Linux only - all eight shipped;
   the two `intent_*` with MS3) (`specs/architecture/tool-registry.md`),
   26 capability constants (24 shipped; the two `intents.*` with MS3)
   (`specs/architecture/capability-model.md`), the 8 error codes

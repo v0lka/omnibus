@@ -20,7 +20,7 @@ as demand warrants).
 | Ubuntu LTS | atspi | journald, persistence is a per-machine probe fact (m0-findings Table 1: fresh installs default persistent); doctor enables where volatile | systemd1 255 (24.04, M0 check) | apt (no undo); NM behind netplan | xdg-portal; NM read-only | fs-xdg | Ubuntu docs | **T2** |
 | Mint | atspi | journald, persistence is a per-machine probe fact (m0-findings Table 1: Mint 22.x inherits Ubuntu's persistent default); doctor enables where volatile | systemd1 = Ubuntu LTS | apt (no undo) | xdg-portal; X11 default | fs-xdg | Mint docs/forums | **T2** |
 | Fedora desktop | atspi | journald, default M0 check | systemd1 (fresh) | dnf (transactional undo) | xdg-portal (fresh interfaces) | fs-xdg | Fedora docs | **T2** |
-| macOS desktop | ax | unifiedlog | launchd | brew + mas | ScreenCaptureKit (+ AppIntents optional) | fs-tcc | kb-guides | **T2** (second target after Arch) |
+| macOS desktop | ax | unifiedlog | launchd | brew + mas | ScreenCaptureKit; UNUserNotificationCenter (`notify`); NSPasteboard (`clip_read`/`clip_write`) | fs-tcc | kb-guides | **T2** (second target after Arch) |
 
 ## Tier Definitions
 
