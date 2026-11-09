@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! The process-telemetry adapter: the Linux [`ProcessTelemetry`] implementation
 //! over `/proc`, sysfs and UPower (subsystem 12, roadmap tasks 2.8.2 and 2.8.3,
 //! specs/domains/process-telemetry.md).

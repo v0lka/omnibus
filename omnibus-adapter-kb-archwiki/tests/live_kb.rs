@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Live binding of the KnowledgeBase contract suite against the real ArchWiki
 //! endpoint. The test probes reachability first and skips gracefully when the
 //! network is down — offline behavior is covered by the offline unit suite.

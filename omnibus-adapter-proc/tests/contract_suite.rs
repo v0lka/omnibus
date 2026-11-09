@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Binder for the `ProcessTelemetry` contract suite (R2) against two honest
 //! stands:
 //!

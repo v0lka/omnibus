@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Binder for the AppLauncher contract suite (R2) against a live stand. The
 //! stand is honest by construction: a synthetic `.desktop` fixture in a
 //! temp XDG data directory (no reliance on what the host happens to have

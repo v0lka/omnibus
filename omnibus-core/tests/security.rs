@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Integration tests: security negatives from quality-gates.md (R5/R6) that the
 //! skeleton can already enforce mechanically.
 //!

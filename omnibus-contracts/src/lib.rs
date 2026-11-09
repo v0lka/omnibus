@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! `omnibus-contracts` — the explicit seam of Omnibus.
 //!
 //! This crate is the ONLY shared dependency of the system (see

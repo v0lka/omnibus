@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! apt adapter: package list/info/search/install/remove/history for the
 //! Debian/Ubuntu/Mint family (roadmap tasks 2.2.1 and 2.2.2).
 //!

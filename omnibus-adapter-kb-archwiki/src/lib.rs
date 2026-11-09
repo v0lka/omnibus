@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! kb-archwiki adapter: knowledge base search and pages (ArchWiki + Manjaro
 //! overlay; roadmap 1.5.6 reading, 2.5.2 overlay). The adapter caches every
 //! fetched article under its cache directory and degrades honestly: when the

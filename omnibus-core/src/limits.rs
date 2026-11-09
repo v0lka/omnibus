@@ -63,4 +63,22 @@ mod tests {
         assert!(is_tree_tool(omnibus_contracts::capabilities::DESKTOP_TREE));
         assert!(!is_tree_tool("journal_query"));
     }
+
+    /// `is_tree_tool` compares the tool NAME against the `DESKTOP_TREE`
+    /// capability constant, so the equality between the assembled dotted name
+    /// and the constant is load-bearing: this test fails if either side is
+    /// renamed, instead of silently dropping the 15 s budget on `desktop.tree`
+    /// (or widening it onto a sibling tool). The sibling `desktop.element`
+    /// answers behind the same capability but keeps the standard read budget.
+    #[test]
+    fn the_tree_budget_binds_to_the_registry_constant() {
+        let name = crate::error_map::join_tool("desktop", "tree");
+        assert_eq!(name, omnibus_contracts::capabilities::DESKTOP_TREE);
+        assert!(is_tree_tool(&name));
+        let element = crate::error_map::join_tool("desktop", "element");
+        assert!(
+            !is_tree_tool(&element),
+            "desktop.element shares the capability but not the wider budget"
+        );
+    }
 }

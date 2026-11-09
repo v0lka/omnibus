@@ -37,3 +37,7 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 # Panic-free seam: contracts/core/adapters return contract errors instead.
 unwrap_used = "warn"
+# Panic-free seam, second half: `expect` panics too. Production code carries
+# zero `.expect()` calls; test code (cfg(test) modules and integration tests)
+# is allowed by scoped attributes at the crate roots / test file tops.
+expect_used = "warn"

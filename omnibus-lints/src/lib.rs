@@ -20,6 +20,23 @@
 //! `omnibus-contracts/tests` (the roadmap's suggested location) so that the
 //! contracts crate stays free of internal dev-dependencies — its invariant
 //! allows only serde/async types.
+//!
+//! ## Scanner limitations (by design; know what the net cannot catch)
+//!
+//! COP and CON scan source line by line: a capability-shaped literal split
+//! across two source lines, or a dotted name assembled at runtime (e.g. the
+//! core's `join_tool("desktop", "tree")`) is lexically invisible to CON —
+//! legal, because the result is assembled from a registry-domain segment, not
+//! written out — and a tuple type split across lines is invisible to COP. The
+//! compensating controls are: (a) the closed capability registry — every
+//! constant lives once in `omnibus-contracts/src/capabilities.rs` and the
+//! fixtures fail the lint crate when a new domain appears; (b) binding tests in
+//! `omnibus-core` (`error_map`, `limits`) that pin the assembled dotted names
+//! to the registry constants they must equal or differ from; (c) `cargo clippy
+//! -D warnings` over the workspace for the compiler-native rules. The lints are
+//! a heuristic net over the boundary rules, not a compiler-enforced invariant;
+//! extending their shapes (a new bypass form) should come with a new fixture
+//! proving the form is caught.
 
 use std::fs;
 use std::path::{Path, PathBuf};

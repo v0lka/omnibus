@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! The schema↔serde round-trip guard (schema.rs module doc, tool-registry.md
 //! Invariants: "JSON schemas are always generated from DTOs; hand-written schemas
 //! fail the build").

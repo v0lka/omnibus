@@ -11,6 +11,10 @@ rules.
 
 - Transport: MCP over stdio only. HTTP transport, a persistent daemon, and an admin control channel
   (socket/D-Bus) are out of v1.
+- stdout carries only the MCP protocol; every diagnostic (session banner, degraded-audit-key
+  warnings, doctor CLI output) goes to stderr - the operator's best-effort channel, never a
+  machine-readable one. The structured truth for agents and admins is the audit trail (journald
+  sink): a lost stderr line loses a warning, never a fact.
 - One instance per MCP connection: N agents = N instances of the same binary.
 - The daemon always lives and dies with the client process; the client owns start and shutdown.
 - Persistent state = config only (scope manifests); everything else is ephemeral per session.

@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Integration tests: the `ps.list` / `ps.info` / `sys.stats` / `power.status`
 //! / `ps.signal` tool surface (roadmap tasks 2.8.2 / 2.8.3, specs/domains/
 //! process-telemetry.md). The fake telemetry adapter (P6: fakes near the

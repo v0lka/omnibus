@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Integration tests for roadmap 1.3.4 (audit pipeline): exactly one structured
 //! event per tool call (reads included) with the full normative schema,
 //! irreversibility of `params_hash`, and sink failure resilience — a broken sink

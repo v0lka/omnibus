@@ -2,10 +2,11 @@
 
 ## Status
 
-Proposed
+Accepted
 
-`Proposed` is gated on implementation facts; roadmap task 2.2.1 closes this ADR to `Accepted`
-when the apt read path (`list`, `info`, `search`, `history`) lands.
+Closed to `Accepted` by roadmap task 2.2.1: the apt read path (`list`, `info`, `search`,
+`history`) is implemented in `omnibus-adapter-apt` on the CLI mapping (`apt-get` plus
+`/var/log/apt/history.log` for history), with the contract suite as the deciding gate.
 
 ## Context
 
@@ -22,7 +23,8 @@ backend is an adapter-internal detail.
 
 ## Consequences
 
-- The SPI boundary keeps the choice local to `omnibus-adapter-apt` (planned).
+- The SPI boundary keeps the choice local to `omnibus-adapter-apt` (shipped: the CLI mapping lives
+  entirely inside the adapter; no contract change was needed).
 - `pkg.undo=none` on apt is a contract fact regardless of backend.
 
 ## Alternatives Considered

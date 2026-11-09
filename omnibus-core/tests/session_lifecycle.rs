@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Integration tests for roadmap 1.3.2 (sessions): the read budget retries exactly
 //! once, writes are never retried, concurrent writes serialize through the write
 //! gate with the audit recording the acquisition order, element tokens do not

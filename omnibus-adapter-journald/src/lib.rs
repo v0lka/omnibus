@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! journald adapter: journal query/tail plus the audit sink (P5).
 //!
 //! Native backend: sd-journal (systemd journal), reached through the `journalctl`

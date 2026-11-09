@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Integration tests for roadmap 2.9.1 (the flatpak/snap inventory, v1.5):
 //! `pkg_list`/`pkg_info` aggregate the native manager and the read-only
 //! inventory adapter — the one documented exception to the one-active-adapter

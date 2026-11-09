@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! systemd1 adapter: service list, status, start/stop/restart, enable/disable.
 //!
 //! Native backend: org.freedesktop.systemd1 over the system D-Bus (zbus 5, tokio).

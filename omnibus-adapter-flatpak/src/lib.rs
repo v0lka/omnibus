@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! flatpak/snap adapter: the read-only package inventory (roadmap task 2.9.1,
 //! specs/domains/packages.md). One crate for both stores — `flatpak` and `snap`
 //! are called through their CLI binaries, and CLI shapes never leave the

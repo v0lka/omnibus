@@ -118,83 +118,12 @@ pub fn join_tool(domain: &str, leaf: &str) -> String {
 }
 
 /// The capability a tool maps to, for denial messages (tool-registry.md bindings).
+///
+/// Delegates to the tool registry: the binding lives on the tool's own row
+/// (`ToolSpec.capability`), so the denial path and the gate consult one
+/// mapping and cannot diverge (the structural test in `tools` pins it).
 pub fn capability_for_tool(tool: &str) -> Option<&'static str> {
-    use omnibus_contracts::capabilities as c;
-    // Dotted names assembled, never written as literals (R4-CON).
-    let (dtree, delem, dsetv, dinv) = (
-        join_tool("desktop", "tree"),
-        join_tool("desktop", "element"),
-        join_tool("desktop", "set_value"),
-        join_tool("desktop", "invoke"),
-    );
-    for (name, cap) in [
-        (dtree.as_str(), c::DESKTOP_TREE),
-        (delem.as_str(), c::DESKTOP_TREE),
-        (dsetv.as_str(), c::DESKTOP_WRITE_TYPED),
-        (dinv.as_str(), c::DESKTOP_WRITE_TYPED),
-        ("clip_read", c::PORTAL_CLIPBOARD),
-        ("clip_write", c::PORTAL_CLIPBOARD),
-        ("screenshot", c::PORTAL_SCREENSHOT),
-        ("notify", c::PORTAL_NOTIFY),
-        ("svc_list", c::SERVICE_READ),
-        ("svc_status", c::SERVICE_READ),
-        ("svc_start", c::SERVICE_WRITE),
-        ("svc_stop", c::SERVICE_WRITE),
-        ("net_status", c::NET_READ),
-        ("journal_query", c::JOURNAL_QUERY),
-        ("pkg_list", c::PKG_READ),
-        ("pkg_info", c::PKG_READ),
-        ("pkg_install", c::PKG_WRITE),
-        ("pkg_remove", c::PKG_WRITE),
-        ("pkg_undo", c::PKG_UNDO),
-        ("fs_list", c::FILES_SCOPE_READ),
-        ("fs_read", c::FILES_SCOPE_READ),
-        ("fs_write", c::FILES_SCOPE_WRITE),
-        ("wiki_search", c::KB_PRESENT),
-        ("wiki_page", c::KB_PRESENT),
-    ] {
-        if name == tool {
-            return Some(cap);
-        }
-    }
-    // The v1.5 app tools: dotted names assembled (R4-CON), then compared.
-    // `app.launch` and `app.open` share the write capability; `app.list` is
-    // the read (specs/domains/app-launch.md).
-    let (alist, alaunc, aopen) = (
-        join_tool("app", "list"),
-        join_tool("app", "launch"),
-        join_tool("app", "open"),
-    );
-    if tool == alist.as_str() {
-        return Some(c::APP_READ);
-    }
-    if tool == alaunc.as_str() || tool == aopen.as_str() {
-        return Some(c::APP_LAUNCH);
-    }
-    // The v1.5 process-telemetry tools (specs/domains/process-telemetry.md):
-    // reads behind ps.read / sys.read / power.read, the write behind
-    // ps.signal — each tool its own capability, so a missing power.read fact
-    // hides `power.status` without touching the other four.
-    let (plist, pinfo, psig, sstats, pstatus) = (
-        join_tool("ps", "list"),
-        join_tool("ps", "info"),
-        join_tool("ps", "signal"),
-        join_tool("sys", "stats"),
-        join_tool("power", "status"),
-    );
-    if tool == plist.as_str() || tool == pinfo.as_str() {
-        return Some(c::PS_READ);
-    }
-    if tool == psig.as_str() {
-        return Some(c::PS_SIGNAL);
-    }
-    if tool == sstats.as_str() {
-        return Some(c::SYS_READ);
-    }
-    if tool == pstatus.as_str() {
-        return Some(c::POWER_READ);
-    }
-    None
+    crate::tools::capability_of_tool(tool)
 }
 
 #[cfg(test)]
@@ -319,5 +248,31 @@ mod tests {
             psig.as_str(),
         );
         assert!(denied.contains("omnibusd grant ps.signal"), "{denied}");
+    }
+
+    /// Pins the load-bearing equality between the dotted tool names assembled
+    /// via `join_tool` and the capability constants they must equal (or must
+    /// differ from). Runtime logic compares these strings directly — the tree
+    /// budget (`limits::is_tree_tool`) keys the wider 15 s budget off the
+    /// assembled name equaling `DESKTOP_TREE` — so a rename on either side of
+    /// the pairing must fail here instead of silently changing budgets, gates
+    /// or remedy text.
+    #[test]
+    fn dotted_tool_names_bind_to_their_registry_constants() {
+        use omnibus_contracts::capabilities as c;
+        // Identity pairs: the tool name equals the capability constant.
+        assert_eq!(join_tool("desktop", "tree"), c::DESKTOP_TREE);
+        assert_eq!(join_tool("app", "launch"), c::APP_LAUNCH);
+        assert_eq!(join_tool("ps", "signal"), c::PS_SIGNAL);
+        // Non-identity pairs: tools that deliberately answer behind a
+        // differently named capability (tool/capability namespaces overlap
+        // only where pinned above).
+        assert_ne!(join_tool("desktop", "element"), c::DESKTOP_TREE);
+        assert_ne!(join_tool("desktop", "set_value"), c::DESKTOP_WRITE_TYPED);
+        assert_ne!(join_tool("app", "list"), c::APP_READ);
+        assert_ne!(join_tool("app", "open"), c::APP_LAUNCH);
+        assert_ne!(join_tool("ps", "list"), c::PS_READ);
+        assert_ne!(join_tool("sys", "stats"), c::SYS_READ);
+        assert_ne!(join_tool("power", "status"), c::POWER_READ);
     }
 }

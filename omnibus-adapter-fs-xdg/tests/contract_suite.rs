@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Contract suite binding for fs-xdg (R2): the `FileScope` family suites run
 //! against a hermetic tempdir layout — `$HOME` = temp root, the granted write
 //! scope = `projects/`. Runs everywhere (no live backend needed).

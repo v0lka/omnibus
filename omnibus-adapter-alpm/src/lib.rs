@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! alpm adapter: package list/info/search/install/remove/history and
 //! cache-downgrade undo.
 //!

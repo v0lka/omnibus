@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! xdg-portals adapter: screenshot, clipboard, notifications via desktop portals.
 //!
 //! Native backend: the xdg-desktop-portal service on the session bus plus the
@@ -269,7 +270,15 @@ async fn run_bounded(
 
     let total = async {
         if let Some(input) = stdin {
-            let mut handle = stdin_handle.expect("stdin piped when input is present");
+            // The pipe was configured with the process above; if the OS ever
+            // fails to hand it over, the seam answers a contract error instead
+            // of panicking.
+            let Some(mut handle) = stdin_handle else {
+                return Err(ContractError::NativeFailure {
+                    code: 1,
+                    payload: format!("clipboard backend {} has no stdin pipe", program.display()),
+                });
+            };
             handle
                 .write_all(&input)
                 .await
@@ -279,27 +288,20 @@ async fn run_bounded(
                 .await
                 .map_err(|e| map_err(String::from("clipboard stdin"), e))?;
         }
-        let stdout = if stdout_handle.is_some() {
-            let handle = stdout_handle
-                .as_mut()
-                .expect("stdout piped in capture mode");
+        let stdout = if let Some(handle) = stdout_handle.take() {
             let mut buf: Vec<u8> = Vec::new();
             // +1 turns an oversized clipboard into a typed cap refusal
             // instead of a silently bigger buffer.
             let took = {
-                // Borrow the handle: `take` consumes its receiver, and the
-                // handle must survive so it can be dropped (SIGPIPE for a
-                // still-writing backend) below.
+                // `take` bounds the read; the owned pipe survives this block
+                // and drops (SIGPIPE for a still-writing backend) when the
+                // arm ends, still before `wait()` below.
                 let mut limited = handle.take(cap + 1);
                 limited
                     .read_to_end(&mut buf)
                     .await
                     .map_err(|e| map_err(String::from("clipboard stdout"), e))?
             };
-            // Release the OWNED pipe early: a backend still writing gets
-            // SIGPIPE and exits instead of parking `wait()` until the budget
-            // runs out.
-            drop(stdout_handle.take());
             if u64::try_from(took).unwrap_or(u64::MAX) > cap {
                 return Err(ContractError::Unsupported {
                     reason: format!(

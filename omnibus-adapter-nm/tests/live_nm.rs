@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Live binding of the NetworkStatus contract suite against this machine's
 //! NetworkManager (roadmap 2.2.3: the suite runs green against the
 //! implementation). When NM is absent on the system bus the test skips

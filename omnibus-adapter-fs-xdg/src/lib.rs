@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! fs-xdg adapter: read/list/write inside granted XDG scopes (roadmap 1.5.5,
 //! 1.6.4). The default read scope is `$HOME` including dotfiles (decision
 //! 2026-10-10); writes require granted paths and are re-checked here under the

@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! `omnibusd` — the Omnibus daemon (composition root).
 //!
 //! Modes (specs/contracts/mcp-client-daemon.md, config-and-grants.md):

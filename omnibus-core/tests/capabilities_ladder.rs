@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Integration tests for roadmap 1.3.5 (capabilities registry and tool gating):
 //! the four ladder states end to end through the assembled document and the gate
 //! — degraded (visible, limitation marked), absent (hidden, `CapabilityRequired`

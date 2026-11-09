@@ -17,12 +17,41 @@ use omnibus_contracts::dto::services::{ServiceActionRequest, ServiceFilter};
 use omnibus_contracts::errors::ContractError;
 use omnibus_contracts::schema::{DtoSchema, SchemaNode, json_schema};
 
-use crate::error_map::{capability_for_tool, join_tool};
+use crate::error_map::join_tool;
 use crate::ladder::LadderState;
 use crate::limits;
 use crate::session::ELEMENT_TOKEN_MAP_CAP;
 
-/// One registry row: name, description, generated schema, and the gating facts.
+/// The registry slot that would serve a tool: audit attribution before the
+/// adapter is reached (a successful dispatch carries the exact serving adapter
+/// in `DispatchOutcome` instead). One variant per registry slot plus `Core`
+/// for the core-answered tools.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Subsystem {
+    A11y,
+    Journal,
+    Services,
+    Packages,
+    Screen,
+    Notify,
+    Files,
+    Kb,
+    Net,
+    AppLauncher,
+    ProcessTelemetry,
+    Probe,
+    Core,
+}
+
+/// Component value for tools with no declared floor row: `floor_met` passes
+/// trivially (platform-matrix.md).
+const COMPONENT_NONE: &str = "none";
+
+/// One registry row: name, description, generated schema, and the gating
+/// facts. The gating metadata (capability, floor component, serving slot)
+/// lives on the row itself — the registry is the single mapping table, so a
+/// new tool cannot be added unmapped (the row type forces the decision, and a
+/// `None` capability outside the core tools fails the structural test).
 #[derive(Clone)]
 pub struct ToolSpec {
     pub name: String,
@@ -32,6 +61,12 @@ pub struct ToolSpec {
     pub grant_key: Option<&'static str>,
     /// Parameterized-scope tool: the argument carrying the canonical path.
     pub path_arg: Option<&'static str>,
+    /// The capability the tool answers behind (`None`: a core tool, ungated).
+    pub capability: Option<&'static str>,
+    /// The subsystem component the ladder's floor check runs against.
+    pub component: &'static str,
+    /// The registry slot that would serve the tool (audit attribution).
+    pub subsystem: Subsystem,
 }
 
 impl ToolSpec {
@@ -42,6 +77,9 @@ impl ToolSpec {
             args_schema: args,
             grant_key: None,
             path_arg: None,
+            capability: None,
+            component: COMPONENT_NONE,
+            subsystem: Subsystem::Core,
         }
     }
 
@@ -58,8 +96,45 @@ impl ToolSpec {
             args_schema: args,
             grant_key: Some(grant_key),
             path_arg,
+            capability: None,
+            component: COMPONENT_NONE,
+            subsystem: Subsystem::Core,
         }
     }
+
+    /// Attaches the gating metadata to a domain tool row: the capability it
+    /// answers behind, the floor component, and the serving slot. Every
+    /// non-core row carries this; the structural test
+    /// (`every_domain_row_carries_gating_metadata`) rejects a row without it.
+    fn gated(
+        mut self,
+        capability: &'static str,
+        component: &'static str,
+        subsystem: Subsystem,
+    ) -> Self {
+        self.capability = Some(capability);
+        self.component = component;
+        self.subsystem = subsystem;
+        self
+    }
+
+    /// Attaches audit attribution without a capability: core-answered rows
+    /// that still resolve to a registry slot (`capabilities` → probe).
+    fn attributed(mut self, subsystem: Subsystem) -> Self {
+        self.subsystem = subsystem;
+        self
+    }
+}
+
+/// The registry row for one tool name.
+fn spec_for(tool: &str) -> Option<&'static ToolSpec> {
+    all_specs().iter().find(|s| s.name == tool)
+}
+
+/// The capability a tool answers behind — the same mapping the gate, the
+/// hiding rule and the denial messages consult (tool-registry.md bindings).
+pub fn capability_of_tool(tool: &str) -> Option<&'static str> {
+    spec_for(tool).and_then(|s| s.capability)
 }
 
 /// The full normative registry in tool-registry.md order. Built once and cached
@@ -79,181 +154,212 @@ fn build_specs() -> Vec<ToolSpec> {
             join_tool("desktop", "tree"),
             "a11y tree of one application, role+name addressing",
             TreeSelector::schema(),
-        ),
+        )
+        .gated(cap::DESKTOP_TREE, "at-spi2", Subsystem::A11y),
         ToolSpec::read(
             join_tool("desktop", "element"),
             "flat detail of one a11y node (attributes, states, actions)",
             omnibus_contracts::dto::desktop::ElementRequest::schema(),
-        ),
+        )
+        .gated(cap::DESKTOP_TREE, "at-spi2", Subsystem::A11y),
         ToolSpec::write(
             join_tool("desktop", "set_value"),
             "typed write: set a value on an editable element",
             SetValueRequest::schema(),
             cap::DESKTOP_WRITE_TYPED,
             None,
-        ),
+        )
+        .gated(cap::DESKTOP_WRITE_TYPED, "at-spi2", Subsystem::A11y),
         ToolSpec::write(
             join_tool("desktop", "invoke"),
             "typed write: invoke a named action (button press)",
             InvokeRequest::schema(),
             cap::DESKTOP_WRITE_TYPED,
             None,
-        ),
+        )
+        .gated(cap::DESKTOP_WRITE_TYPED, "at-spi2", Subsystem::A11y),
         ToolSpec::read(
             String::from("clip_read"),
             "current clipboard content",
             serde_json::Value::Null.into_any(),
-        ),
+        )
+        .gated(cap::PORTAL_CLIPBOARD, COMPONENT_NONE, Subsystem::Screen),
         ToolSpec::write(
             String::from("clip_write"),
             "replace the clipboard content (write grant required)",
             ClipboardContent::schema(),
             cap::PORTAL_CLIPBOARD,
             None,
-        ),
+        )
+        .gated(cap::PORTAL_CLIPBOARD, COMPONENT_NONE, Subsystem::Screen),
         ToolSpec::read(
             String::from("screenshot"),
             "one screen capture as base64 image",
             ScreenshotRequest::schema(),
-        ),
+        )
+        .gated(cap::PORTAL_SCREENSHOT, COMPONENT_NONE, Subsystem::Screen),
         ToolSpec::write(
             String::from("notify"),
             "desktop notification (write grant required)",
             NotifyRequest::schema(),
             cap::PORTAL_NOTIFY,
             None,
-        ),
+        )
+        .gated(cap::PORTAL_NOTIFY, COMPONENT_NONE, Subsystem::Notify),
         ToolSpec::read(
             String::from("svc_list"),
             "systemd units matching the filter",
             ServiceFilter::schema(),
-        ),
+        )
+        .gated(cap::SERVICE_READ, "systemd", Subsystem::Services),
         ToolSpec::read(
             String::from("svc_status"),
             "one unit's status",
             omnibus_contracts::dto::services::ServiceNameRequest::schema(),
-        ),
+        )
+        .gated(cap::SERVICE_READ, "systemd", Subsystem::Services),
         ToolSpec::write(
             String::from("svc_start"),
             "start a unit (write grant required)",
             omnibus_contracts::dto::services::ServiceNameRequest::schema(),
             cap::SERVICE_WRITE,
             None,
-        ),
+        )
+        .gated(cap::SERVICE_WRITE, "systemd", Subsystem::Services),
         ToolSpec::write(
             String::from("svc_stop"),
             "stop a unit (write grant required)",
             omnibus_contracts::dto::services::ServiceNameRequest::schema(),
             cap::SERVICE_WRITE,
             None,
-        ),
+        )
+        .gated(cap::SERVICE_WRITE, "systemd", Subsystem::Services),
         ToolSpec::read(
             String::from("net_status"),
             "network devices, connectivity, wifi networks (read-only)",
             serde_json::Value::Null.into_any(),
-        ),
+        )
+        .gated(cap::NET_READ, COMPONENT_NONE, Subsystem::Net),
         ToolSpec::read(
             String::from("journal_query"),
             "filtered journal query; past boots need the prev_boot capability",
             JournalQuery::schema(),
-        ),
+        )
+        .gated(cap::JOURNAL_QUERY, "journal", Subsystem::Journal),
         ToolSpec::read(
             String::from("pkg_list"),
             "installed packages",
             PackageListRequest::schema(),
-        ),
+        )
+        .gated(cap::PKG_READ, COMPONENT_NONE, Subsystem::Packages),
         ToolSpec::read(
             String::from("pkg_info"),
             "one package's metadata",
             PackageNameRequest::schema(),
-        ),
+        )
+        .gated(cap::PKG_READ, COMPONENT_NONE, Subsystem::Packages),
         ToolSpec::write(
             String::from("pkg_install"),
             "install a package (write grant required)",
             PackageNameRequest::schema(),
             cap::PKG_WRITE,
             None,
-        ),
+        )
+        .gated(cap::PKG_WRITE, COMPONENT_NONE, Subsystem::Packages),
         ToolSpec::write(
             String::from("pkg_remove"),
             "remove a package (write grant required)",
             PackageNameRequest::schema(),
             cap::PKG_WRITE,
             None,
-        ),
+        )
+        .gated(cap::PKG_WRITE, COMPONENT_NONE, Subsystem::Packages),
         ToolSpec::write(
             String::from("pkg_undo"),
             "undo the last package action (hidden when undo is none)",
             PackageNameRequest::schema(),
             cap::PKG_UNDO,
             None,
-        ),
+        )
+        .gated(cap::PKG_UNDO, COMPONENT_NONE, Subsystem::Packages),
         ToolSpec::read(
             String::from("fs_list"),
             "directory listing inside granted scopes",
             PathQuery::schema(),
-        ),
+        )
+        .gated(cap::FILES_SCOPE_READ, COMPONENT_NONE, Subsystem::Files),
         ToolSpec::read(
             String::from("fs_read"),
             "file content inside granted scopes",
             FileReadRequest::schema(),
-        ),
+        )
+        .gated(cap::FILES_SCOPE_READ, COMPONENT_NONE, Subsystem::Files),
         ToolSpec::write(
             String::from("fs_write"),
             "write a file inside the parameterized write scope",
             FileWriteRequest::schema(),
             cap::FILES_SCOPE_WRITE,
             Some("path"),
-        ),
+        )
+        .gated(cap::FILES_SCOPE_WRITE, COMPONENT_NONE, Subsystem::Files),
         ToolSpec::read(
             String::from("wiki_search"),
             "knowledge base search (platform docs)",
             KbQuery::schema(),
-        ),
+        )
+        .gated(cap::KB_PRESENT, COMPONENT_NONE, Subsystem::Kb),
         ToolSpec::read(
             String::from("wiki_page"),
             "one knowledge base article",
             KbPageRequest::schema(),
-        ),
+        )
+        .gated(cap::KB_PRESENT, COMPONENT_NONE, Subsystem::Kb),
         ToolSpec::read(
             join_tool("app", "list"),
             "installed applications (.desktop inventory: id, name, exec, icon)",
             serde_json::Value::Null.into_any(),
-        ),
+        )
+        .gated(cap::APP_READ, COMPONENT_NONE, Subsystem::AppLauncher),
         ToolSpec::write(
             join_tool("app", "launch"),
             "start an application as a transient user unit (write grant required)",
             omnibus_contracts::dto::app_launcher::AppSpec::schema(),
             cap::APP_LAUNCH,
             None,
-        ),
+        )
+        .gated(cap::APP_LAUNCH, "systemd", Subsystem::AppLauncher),
         ToolSpec::write(
             join_tool("app", "open"),
             "open a URI or file with the associated application (write grant required)",
             omnibus_contracts::dto::app_launcher::OpenRequest::schema(),
             cap::APP_LAUNCH,
             None,
-        ),
+        )
+        .gated(cap::APP_LAUNCH, COMPONENT_NONE, Subsystem::AppLauncher),
         ToolSpec::read(
             join_tool("ps", "list"),
             "process inventory from /proc (pid, name, state, CPU, RSS, cgroup)",
             omnibus_contracts::dto::process_telemetry::ProcessListQuery::schema(),
-        ),
+        )
+        .gated(cap::PS_READ, COMPONENT_NONE, Subsystem::ProcessTelemetry),
         ToolSpec::read(
             join_tool("ps", "info"),
             "one consistent per-PID snapshot",
             omnibus_contracts::dto::process_telemetry::PidRequest::schema(),
-        ),
+        )
+        .gated(cap::PS_READ, COMPONENT_NONE, Subsystem::ProcessTelemetry),
         ToolSpec::read(
             join_tool("sys", "stats"),
             "system load: CPU busy percent, load averages, memory and swap",
             serde_json::Value::Null.into_any(),
-        ),
+        )
+        .gated(cap::SYS_READ, COMPONENT_NONE, Subsystem::ProcessTelemetry),
         ToolSpec::read(
             join_tool("power", "status"),
             "battery and supply facts (hidden without UPower + a battery)",
             serde_json::Value::Null.into_any(),
-        ),
+        )
+        .gated(cap::POWER_READ, COMPONENT_NONE, Subsystem::ProcessTelemetry),
         ToolSpec::write(
             join_tool("ps", "signal"),
             "send one closed-enum signal to a pid from ps.list (write grant required; \
@@ -261,12 +367,14 @@ fn build_specs() -> Vec<ToolSpec> {
             omnibus_contracts::dto::process_telemetry::SignalRequest::schema(),
             cap::PS_SIGNAL,
             None,
-        ),
+        )
+        .gated(cap::PS_SIGNAL, COMPONENT_NONE, Subsystem::ProcessTelemetry),
         ToolSpec::read(
             String::from("capabilities"),
             "machine-readable truth about this machine",
             serde_json::Value::Null.into_any(),
-        ),
+        )
+        .attributed(Subsystem::Probe),
         ToolSpec::read(
             String::from("session_info"),
             "session identity and effective limits",
@@ -291,36 +399,19 @@ impl SchemaFromValue for serde_json::Value {
     }
 }
 
-/// The subsystem component a tool's floor check runs against. The systemd floor
-/// gates only the services tools (platform-matrix.md keeps journal and package
-/// reads below the floor); `journal` and `none` have no declared floor row, so
-/// `floor_met` passes trivially for them. `app.launch` rides the same systemd
-/// floor (platform-matrix.md: `systemd-run` ships with systemd itself — no
-/// separate floor), while `app.list` and `app.open` are presence-based (the
-/// `.desktop` directories and the `xdg-open` binary) with no floor row.
+/// The subsystem component a tool's floor check runs against — resolved from
+/// the tool's own registry row (a row carries its component; there is no
+/// name-prefix mapping left to maintain). The systemd floor gates only the
+/// services tools (platform-matrix.md keeps journal and package reads below
+/// the floor); `journal` and `none` have no declared floor row, so `floor_met`
+/// passes trivially for them. `app.launch` rides the same systemd floor
+/// (platform-matrix.md: `systemd-run` ships with systemd itself — no separate
+/// floor), while `app.list` and `app.open` are presence-based (the `.desktop`
+/// directories and the `xdg-open` binary) with no floor row.
 fn component_for_tool(tool: &str) -> &'static str {
-    let (alaunch, alist, aopen) = (
-        join_tool("app", "launch"),
-        join_tool("app", "list"),
-        join_tool("app", "open"),
-    );
-    if tool == alaunch.as_str() {
-        "systemd"
-    } else if tool == alist.as_str() || tool == aopen.as_str() {
-        "none"
-    } else if tool.starts_with("desktop") {
-        "at-spi2"
-    } else if tool.starts_with("svc_") {
-        "systemd"
-    } else if tool.starts_with("journal") {
-        "journal"
-    } else {
-        // pkg_*, the v1.5 dotted tools (app.*, ps.*, sys.stats, power.status)
-        // and everything else: no declared floor row (trivially met). The
-        // process reads carry no version floor at all — /proc and sysfs
-        // activate on every target Linux platform.
-        "none"
-    }
+    spec_for(tool)
+        .map(|s| s.component)
+        .unwrap_or(COMPONENT_NONE)
 }
 
 /// Whether `journal_query { boot: previous }` may run this session.
@@ -374,14 +465,20 @@ pub enum GateDecision {
 }
 
 /// Resolves the ladder + grant state for a tool against the capabilities state.
+/// The tool's capability, floor component and grant key are read from its own
+/// registry row — a row cannot reach the gate unmapped.
 pub fn gate(core: &crate::Core, tool: &str) -> GateDecision {
-    let Some(capability) = capability_for_tool(tool) else {
+    let Some(spec) = spec_for(tool) else {
         return GateDecision::Run; // core tools are ungated
     };
-    let component = component_for_tool(tool);
-    let ladder = core
-        .caps
-        .ladder(capability, component, core.grants.has_grant(capability));
+    let Some(capability) = spec.capability else {
+        return GateDecision::Run; // core tools are ungated
+    };
+    let ladder = core.caps.ladder(
+        capability,
+        spec.component,
+        core.grants.has_grant(capability),
+    );
     // The `app.open` arm is presence-based on top of the shared `app.launch`
     // capability (specs/domains/app-launch.md Degradation, platform-matrix.md):
     // `app.launch` and `app.open` carry one registry constant, so the ladder
@@ -405,8 +502,7 @@ pub fn gate(core: &crate::Core, tool: &str) -> GateDecision {
     }
     match ladder {
         LadderState::Available | LadderState::Degraded => {
-            if let Some(spec) = all_specs().iter().find(|s| s.name == tool)
-                && let Some(grant_key) = spec.grant_key
+            if let Some(grant_key) = spec.grant_key
                 && !core.grants.has_grant(grant_key)
             {
                 return GateDecision::Denied;
@@ -746,52 +842,46 @@ async fn refuse(
 }
 
 fn adapter_name(core: &crate::Core, tool: &str) -> String {
-    let subsystem: Option<String> = if tool.starts_with("desktop") {
-        core.registry.a11y.as_ref().map(|a| a.report().adapter)
-    } else if tool.starts_with("journal") {
-        core.registry.journal.as_ref().map(|a| a.report().adapter)
-    } else if tool.starts_with("svc_") {
-        core.registry.services.as_ref().map(|a| a.report().adapter)
-    } else if tool.starts_with("pkg_") {
-        // The aggregated packages subsystem (v1.5): the native manager is the
-        // primary attribution; the inventory names itself when it is the only
-        // active adapter (timeout/refusal paths — a successful dispatch
-        // carries its exact adapter in DispatchOutcome).
-        core.registry
-            .packages
-            .as_ref()
-            .or(core.registry.packages_inventory.as_ref())
-            .map(|a| a.report().adapter)
-    } else if tool.starts_with("clip") || tool == "screenshot" {
-        core.registry.screen.as_ref().map(|a| a.report().adapter)
-    } else if tool == "notify" {
-        core.registry.notify.as_ref().map(|a| a.report().adapter)
-    } else if tool.starts_with("fs_") {
-        core.registry.files.as_ref().map(|a| a.report().adapter)
-    } else if tool.starts_with("wiki_") {
-        core.registry.kb.as_ref().map(|a| a.report().adapter)
-    } else if tool == "net_status" {
-        core.registry.net.as_ref().map(|a| a.report().adapter)
-    } else if tool.starts_with("app.") {
-        // The dotted app tool names are assembled (R4-CON); the prefix check
-        // keeps the mapping one line for app.list / app.launch / app.open.
-        core.registry
+    // The slot comes from the tool's own registry row (the closed Subsystem
+    // enum), not from name prefixes; unknown and core-answered names attribute
+    // to `core`.
+    let subsystem = spec_for(tool)
+        .map(|s| s.subsystem)
+        .unwrap_or(Subsystem::Core);
+    let adapter: Option<String> = match subsystem {
+        Subsystem::A11y => core.registry.a11y.as_ref().map(|a| a.report().adapter),
+        Subsystem::Journal => core.registry.journal.as_ref().map(|a| a.report().adapter),
+        Subsystem::Services => core.registry.services.as_ref().map(|a| a.report().adapter),
+        Subsystem::Packages => {
+            // The aggregated packages subsystem (v1.5): the native manager is
+            // the primary attribution; the inventory names itself when it is
+            // the only active adapter (timeout/refusal paths — a successful
+            // dispatch carries its exact adapter in DispatchOutcome).
+            core.registry
+                .packages
+                .as_ref()
+                .or(core.registry.packages_inventory.as_ref())
+                .map(|a| a.report().adapter)
+        }
+        Subsystem::Screen => core.registry.screen.as_ref().map(|a| a.report().adapter),
+        Subsystem::Notify => core.registry.notify.as_ref().map(|a| a.report().adapter),
+        Subsystem::Files => core.registry.files.as_ref().map(|a| a.report().adapter),
+        Subsystem::Kb => core.registry.kb.as_ref().map(|a| a.report().adapter),
+        Subsystem::Net => core.registry.net.as_ref().map(|a| a.report().adapter),
+        Subsystem::AppLauncher => core
+            .registry
             .app_launcher
             .as_ref()
-            .map(|a| a.report().adapter)
-    } else if tool.starts_with("ps.") || tool.starts_with("sys.") || tool.starts_with("power.") {
-        // The process-telemetry dotted names, assembled (R4-CON): ps.list /
-        // ps.info / ps.signal / sys.stats / power.status share one slot.
-        core.registry
+            .map(|a| a.report().adapter),
+        Subsystem::ProcessTelemetry => core
+            .registry
             .process_telemetry
             .as_ref()
-            .map(|a| a.report().adapter)
-    } else if tool == "capabilities" {
-        core.registry.probe.as_ref().map(|a| a.report().adapter)
-    } else {
-        None
+            .map(|a| a.report().adapter),
+        Subsystem::Probe => core.registry.probe.as_ref().map(|a| a.report().adapter),
+        Subsystem::Core => None,
     };
-    subsystem.unwrap_or_else(|| String::from("core"))
+    adapter.unwrap_or_else(|| String::from("core"))
 }
 
 /// The aggregated `pkg_list` (v1.5, roadmap 2.9.1, specs/domains/packages.md):
@@ -839,7 +929,9 @@ async fn aggregated_list(
         }
         (Some(native), None) => native.report().adapter,
         (None, Some(inventory)) => inventory.report().adapter,
-        (None, None) => unreachable!("both slots checked empty above"),
+        // Unreachable (both slots were checked empty above); the typed error
+        // keeps the seam panic-free even on this arm.
+        (None, None) => return Err(ContractError::AdapterUnavailable),
     };
     Ok((merged, attribution))
 }
@@ -878,8 +970,12 @@ async fn aggregated_info(
             }
         }
     }
-    // Native absent: the inventory alone answers.
-    let inventory = inventory.expect("both slots checked empty above");
+    // Native absent: the inventory alone answers. The slot was checked
+    // present above; the guard keeps the seam panic-free (a contract error
+    // on the unreachable arm instead of a panic).
+    let Some(inventory) = inventory else {
+        return Err(ContractError::AdapterUnavailable);
+    };
     let info = inventory.info(name).await?;
     Ok((info, inventory.report().adapter))
 }
@@ -1390,6 +1486,67 @@ mod tests {
         );
         for expected in ["svc_start", "pkg_undo", "fs_write", "net_status", "doctor"] {
             assert!(names.contains(&expected), "missing {expected}");
+        }
+    }
+
+    /// The gating metadata lives on the row itself: every domain row answers
+    /// behind a capability from the closed registry, every write row carries a
+    /// grant key on top of it, and exactly the three core tools stay ungated.
+    /// A row added without gating metadata fails here instead of silently
+    /// passing the gate (the old unmapped-tool fail-open).
+    #[test]
+    fn every_domain_row_carries_gating_metadata() {
+        const CORE_TOOLS: [&str; 3] = ["capabilities", "session_info", "doctor"];
+        const LEGAL_COMPONENTS: [&str; 4] = ["at-spi2", "systemd", "journal", "none"];
+        for spec in all_specs() {
+            match spec.capability {
+                Some(capability) => {
+                    assert!(
+                        cap::ALL.contains(&capability),
+                        "row {} maps off-registry capability {capability}",
+                        spec.name
+                    );
+                }
+                None => assert!(
+                    CORE_TOOLS.contains(&spec.name.as_str()),
+                    "row {} has no capability mapping — ungated rows must be core tools",
+                    spec.name
+                ),
+            }
+            assert!(
+                LEGAL_COMPONENTS.contains(&spec.component),
+                "row {} carries an unknown floor component {}",
+                spec.name,
+                spec.component
+            );
+            if spec.grant_key.is_some() {
+                assert!(
+                    spec.capability.is_some(),
+                    "write row {} must carry a capability",
+                    spec.name
+                );
+            }
+        }
+        for name in CORE_TOOLS {
+            assert!(
+                all_specs().iter().any(|s| s.name == name),
+                "core tool {name} missing from the registry"
+            );
+        }
+    }
+
+    /// The denial-message path and the gate consult the same mapping (the row's
+    /// capability field): a doctor hint can never name a different capability
+    /// than the gate that produced the denial.
+    #[test]
+    fn the_denial_path_maps_every_registry_row_through_the_spec() {
+        for spec in all_specs() {
+            assert_eq!(
+                crate::error_map::capability_for_tool(&spec.name),
+                spec.capability,
+                "denial mapping and gate mapping diverge on {}",
+                spec.name
+            );
         }
     }
 

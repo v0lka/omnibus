@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! `omnibus-probe` — platform detection, adapter selection, version floors
 //! (specs/architecture/layers-and-crates.md; roadmap tasks 1.4.1, 1.4.2, 2.1.1,
 //! 2.4.1). The probe is the runtime detection level (§7.2): every fresh session

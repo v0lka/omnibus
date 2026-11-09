@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Integration tests for roadmap 1.3.3 (scopes): a grantless write is denied with
 //! `ScopeDenied` and audited, in-band "confirmation" fields cannot unlock anything,
 //! manifest grants surface in doctor, a broken manifest never takes the daemon

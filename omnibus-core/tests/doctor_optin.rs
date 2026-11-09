@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Doctor opt-in integration tests (roadmap 2.5.1, MS2): on a machine whose
 //! probe reports a volatile journald config, doctor reports `journal.persistent`
 //! as `opt-in-required` (honest `warn`, never `ok`) and hands the human BOTH

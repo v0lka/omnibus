@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! kb-guides adapter: knowledge base search and pages over distro docs —
 //! Debian wiki, Ubuntu docs, Mint docs, Fedora docs (roadmap 2.5.2). The
 //! adapter mirrors kb-archwiki (Ф1.5.6): every fetched article is cached under

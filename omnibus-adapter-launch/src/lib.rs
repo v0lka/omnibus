@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! launch adapter: the Linux `AppLauncher` implementation (subsystem 11,
 //! roadmap task 2.7.2, specs/domains/app-launch.md). Three surfaces:
 //!

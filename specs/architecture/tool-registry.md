@@ -58,6 +58,14 @@ limitation marked in the schema (example: `pkg_install` without `pkg.undo` on ap
 - JSON schemas are always generated from DTOs; hand-written schemas fail the build.
 - The registry is closed over this table; adding a tool requires capability constants and a trait
   declared first (roadmap rule R1).
+- Two naming conventions exist, both normative: the v1.0 underscore names (`clip_read`,
+  `svc_start`, `fs_write`) stay exactly as shipped - renaming a shipped tool is a breaking change
+  for MCP clients and is not planned; tools added from v1.5 on use dotted lowercase
+  `{domain}.{action}` names assembled in code from registry-domain segments (never written as
+  capability-shaped literals - R4-CON). A dotted tool name may equal the capability constant behind
+  it (`desktop.tree`, `app.launch`, `ps.signal`) or deliberately differ (`app.list` behind
+  `app.read`, `sys.stats` behind `sys.read`); both pairings are pinned by the core's registry
+  binding tests.
 
 ## Anti-Patterns
 

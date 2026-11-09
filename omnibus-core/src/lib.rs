@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! `omnibus-core` — the OS-agnostic core of Omnibus
 //! (specs/architecture/layers-and-crates.md): MCP facade over rmcp, sessions,
 //! grant checks, the audit pipeline, the capabilities document, and doctor.

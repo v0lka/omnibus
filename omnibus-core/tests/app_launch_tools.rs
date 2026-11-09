@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)] // test-only file: tests may expect; the seam must not
 //! Integration tests: the `app.list` / `app.launch` / `app.open` tool surface
 //! (roadmap task 2.7.2, specs/domains/app-launch.md). The fake launcher (P6:
 //! fakes near the core) carries the same capability facts the real adapter

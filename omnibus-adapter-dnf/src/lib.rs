@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used))] // unit tests may expect; the seam must not
 //! dnf adapter: package list/info/search/install/remove/history and
 //! transactional undo for the Fedora family (roadmap task 2.3.1).
 //!
