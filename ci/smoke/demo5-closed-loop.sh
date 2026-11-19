@@ -131,18 +131,21 @@ with McpClient(["./target/debug/omnibusd"]) as client:
             failed = True
 
     # --- leg 3: app.launch without a grant refuses honestly ---------------
-    # Two honest shapes, both accepted (the demo4 pkg_install pattern): the
+    # Three honest shapes, all accepted (the demo4 pkg_install pattern): the
     # backend present but ungranted -> the grant rung answers ScopeDenied
     # (the tool is hidden from tools/list until the grant exists); the
-    # backend absent entirely -> the hiding rule answers CapabilityRequired.
+    # backend absent entirely -> the hiding rule answers CapabilityRequired;
+    # the platform below the subsystem's version floor -> the R3 ladder
+    # answers FloorUnsupported.
     result = client.call("app.launch", {"app_id": LOOP_APP_ID, "args": []})
     expect_refusal(result, "app.launch without grant",
-                   ("ScopeDenied", "CapabilityRequired"))
+                   ("ScopeDenied", "CapabilityRequired", "FloorUnsupported"))
 
     # --- leg 4: ps.signal without a grant refuses honestly ----------------
+    # Same ladder: grant rung, hiding rule, or the below-floor rung.
     result = client.call("ps.signal", {"pid": 1, "signal": "term"})
     expect_refusal(result, "ps.signal without grant",
-                   ("ScopeDenied", "CapabilityRequired"))
+                   ("ScopeDenied", "CapabilityRequired", "FloorUnsupported"))
 
 if failed:
     sys.exit(1)

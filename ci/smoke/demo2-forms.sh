@@ -124,7 +124,10 @@ with McpClient(["./target/debug/omnibusd"]) as client:
     # --- leg 3: the write path refuses honestly without a grant --------------
     # set_value is [+scope]: ungranted it must answer ScopeDenied; when the a11y
     # write capability is absent the tool is hidden and a direct call must
-    # answer CapabilityRequired (the hiding rule) — both are honest refusals.
+    # answer CapabilityRequired (the hiding rule); when the platform sits
+    # below the subsystem's version floor the tool is hidden as well and the
+    # honest answer is FloorUnsupported (the R3 ladder; bookworm's at-spi2
+    # 2.46 row) — all three are honest refusals.
     if "desktop.set_value" not in tools:
         result = client.call(
             "desktop.set_value", {"node_ref": "omnibus-smoke:none", "value": "x"}
@@ -132,7 +135,7 @@ with McpClient(["./target/debug/omnibusd"]) as client:
         expect_refusal(
             result,
             "desktop.set_value (hidden) without grant",
-            ("ScopeDenied", "CapabilityRequired"),
+            ("ScopeDenied", "CapabilityRequired", "FloorUnsupported"),
         )
     else:
         result = client.call(

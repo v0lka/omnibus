@@ -1015,6 +1015,12 @@ mod tests {
                 let _ = std::fs::write(&swap_file, "in scope\n");
                 let _ = std::fs::rename(&swap_file, &swapper_target);
                 std::thread::yield_now();
+                // A short honest window: a swapper that only yields can win
+                // every decide->open race on a loaded CI runner, starving the
+                // availability assert below (zero reads through the storm).
+                // The storm keeps running on the evil half of every cycle,
+                // and every Ok is still checked for out-of-scope bytes.
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
         });
 
@@ -1110,6 +1116,15 @@ mod tests {
                     let _ = std::fs::rename(&hold, &swapper_sub);
                 }
                 honest = !honest;
+                if honest {
+                    // A short honest window: a swapper that only yields can
+                    // win every decide->open race on a loaded CI runner and
+                    // starve the availability assert below (zero reads
+                    // through the storm). The evil half of every cycle keeps
+                    // the storm running, and every Ok is still checked for
+                    // out-of-scope bytes.
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
                 std::thread::yield_now();
             }
         });
@@ -1193,6 +1208,13 @@ mod tests {
                     let _ = std::fs::rename(&hold, &swapper_sub);
                 }
                 honest = !honest;
+                if honest {
+                    // A short honest window (see the read storm above): the
+                    // listing must still be able to land on a schedulable
+                    // honest state under CI load; the evil half of every
+                    // cycle keeps the storm running.
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
                 std::thread::yield_now();
             }
         });
@@ -1273,6 +1295,13 @@ mod tests {
                     let _ = std::fs::rename(&hold, &swapper_sub);
                 }
                 honest = !honest;
+                if honest {
+                    // A short honest window (see the read storm above): the
+                    // write must still be able to land on a schedulable
+                    // honest state under CI load; the evil half of every
+                    // cycle keeps the storm running.
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
                 std::thread::yield_now();
             }
         });

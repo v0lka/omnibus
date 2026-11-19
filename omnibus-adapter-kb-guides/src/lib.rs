@@ -274,13 +274,25 @@ pub mod testutil {
     }
 
     /// Creates a unique temporary root; `name` separates test families.
+    ///
+    /// Uniqueness leans on a per-process sequence counter, not on the clock
+    /// alone: on hosts whose wall clock serves the same nanosecond tick to
+    /// two rapid calls (coarse clock sources on some CI runners), two
+    /// parallel same-label fixtures could collide on one directory — and
+    /// the first `Drop` would then remove the other test's fixture files
+    /// mid-read. The sequence number makes same-process collisions
+    /// impossible regardless of clock granularity; pid + nanos keep the
+    /// names unique across processes and runs.
     pub fn temp_dir(name: &str) -> TempRoot {
+        use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, AtomicOrdering::Relaxed);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let path = std::env::temp_dir().join(format!(
-            "omnibus-kb-guides-{name}-{}-{nanos}",
+            "omnibus-kb-guides-{name}-{}-{seq}-{nanos}",
             std::process::id()
         ));
         std::fs::create_dir_all(&path).expect("create temp root");

@@ -118,11 +118,16 @@ with McpClient(["./target/debug/omnibusd"]) as client:
     # --- leg 4: the write path refuses honestly without a grant --------------
     # svc_start is [+scope]: ungranted it must answer ScopeDenied; when the
     # service subsystem is absent the tool is hidden and a direct call must
-    # answer CapabilityRequired (the hiding rule) — both are honest refusals.
+    # answer CapabilityRequired (the hiding rule); when the platform sits
+    # below the subsystem's version floor the tool is hidden as well and the
+    # honest answer is FloorUnsupported (the R3 degradation ladder) — all
+    # three are honest refusals.
     if "svc_start" not in tools:
         result = client.call("svc_start", {"unit": "omnibus-smoke-nonexistent.service"})
         expect_refusal(
-            result, "svc_start (hidden) without grant", ("ScopeDenied", "CapabilityRequired")
+            result,
+            "svc_start (hidden) without grant",
+            ("ScopeDenied", "CapabilityRequired", "FloorUnsupported"),
         )
     else:
         result = client.call(
