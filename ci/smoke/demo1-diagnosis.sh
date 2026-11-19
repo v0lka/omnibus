@@ -24,7 +24,7 @@ cleanup() { rm -rf "$TMPDIR_SMOKE"; }
 trap cleanup EXIT
 
 echo "== building the workspace (demo1) =="
-cargo build --workspace --quiet
+source "$REPO_ROOT/ci/smoke/build-workspace.sh"
 
 echo "== running demo1 against a fresh omnibusd (read-only session) =="
 XDG_CONFIG_HOME="$TMPDIR_SMOKE/config" \

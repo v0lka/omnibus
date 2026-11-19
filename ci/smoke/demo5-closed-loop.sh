@@ -79,7 +79,7 @@ NoDisplay=false
 DESKTOP
 
 echo "== building the workspace (demo5) =="
-cargo build --workspace --quiet
+source "$REPO_ROOT/ci/smoke/build-workspace.sh"
 
 # --- session A: fresh daemon, no grants — the write half refuses honestly ---
 echo "== running demo5 session A against a fresh omnibusd (no grants) =="

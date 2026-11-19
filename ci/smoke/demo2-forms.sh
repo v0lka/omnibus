@@ -29,7 +29,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== building the workspace (demo2) =="
-cargo build --workspace --quiet
+source "$REPO_ROOT/ci/smoke/build-workspace.sh"
 
 echo "== seeding the demo file under \$HOME =="
 mkdir -p "$SEED_DIR"
