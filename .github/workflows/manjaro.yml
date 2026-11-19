@@ -209,14 +209,38 @@ jobs:
         run: ci/smoke/run-demos.sh
 
       - name: Probe report — mhwd and delayed repos must be visible
+        # AC 2.4.1 guard (implemented): the probe must surface the Manjaro
+        # facts — delayed repos, mhwd, pamac — instead of reporting silence.
+        # The report is the daemon's serve-mode startup banner on stderr
+        # (omnibusd/src/main.rs, serve()):
+        #   omnibusd: distro=<id> release=<rel> manjaro(delayed_repos=<bool>, mhwd=<bool>, pamac=<bool>)
+        # The manjaro block is printed only when the probe detected the
+        # Manjaro family; the fallback line without it is probe silence, and
+        # that is exactly what this step fails on. (The `omnibusd doctor` CLI
+        # prints distro/kernel/desktop but NOT these facts, so the banner is
+        # the assertion surface.)
+        # One stdio session with stdin already closed: the client is gone, so
+        # the daemon prints the banner and the session ends — status 1 with
+        # "connection closed: initialize request" is the expected shutdown
+        # here; the greps below are the gate, not the exit status.
         run: |
           set -euo pipefail
-          # TODO(roadmap 2.4.1 AC): assert the probe surfaces the Manjaro facts
-          # (delayed repos, mhwd presence, pamac) instead of reporting silence.
-          # Example shape once the CLI supports it:
-          #   ./target/debug/omnibusd doctor | tee probe-report.txt
-          #   grep -q 'manjaro(delayed_repos=true' probe-report.txt
-          echo "TODO(2.4.1): assert delayed-repos/mhwd/pamac appear in the probe report"
+          report="$(mktemp)"
+          trap 'rm -f "$report"' EXIT
+          probe_status=0
+          ./target/debug/omnibusd </dev/null 2>"$report" || probe_status=$?
+          echo "omnibusd exited with status ${probe_status} after stdin EOF (the session ends with its client; expected)"
+          cat "$report"
+          missing=""
+          grep -q 'manjaro(delayed_repos=' "$report" || missing="$missing manjaro-facts-banner(absent: the probe did not surface Manjaro facts at all)"
+          grep -q 'delayed_repos=true' "$report" || missing="$missing delayed_repos=true"
+          grep -q 'mhwd=true' "$report" || missing="$missing mhwd=true"
+          grep -q 'pamac=true' "$report" || missing="$missing pamac=true"
+          if [ -n "$missing" ]; then
+            echo "::error::probe report does not surface the required Manjaro facts (roadmap AC 2.4.1); missing or false:$missing"
+            exit 1
+          fi
+          echo "probe report surfaces the Manjaro facts (delayed repos, mhwd, pamac) — AC 2.4.1 guard green"
 
   # The header promises every run prints which legs were container stand-ins
   # and which were real; this job is that print (always runs, green or red).

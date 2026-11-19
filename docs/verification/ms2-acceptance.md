@@ -27,7 +27,7 @@ Reference machine: Manjaro Linux rolling
 | E4 | R4 boundary lints | `cargo run -p omnibus-lints --bin omnibus-lints` | "OK (R4-COP, R4-NATIVE, R4-CON, R4-EDGES green)" |
 | E5 | R4 red/green fixtures | `cargo test -p omnibus-lints --test fixtures` | 10 passed, 0 failed |
 | E6 | Full workspace tests | `cargo test --workspace` | 462 passed across 47 suites, 0 failed suites |
-| E7 | Packaging + matrix validator | `make packaging` (`python3 ci/validate_packaging.py`) | "all green: 150 checks passed", exit 0 |
+| E7 | Packaging + matrix validator | `make packaging` (`python3 ci/validate_packaging.py`) | "all green: 150 checks passed", exit 0 — Update (2026-11-18): the validator now runs 156 checks (`docs/release-checklist.md` §1 G9) |
 | E8 | Pitch demos as autotests | `ci/smoke/run-demos.sh` | demo1/demo2/demo3 OK — "all demos passed (skips are honest and allowed)" (a first run hit a transient cold-connect stall: the adapter honestly answered `TimeoutError` inside its 5 s request budget while the same query answered in 0.4 s once warm — the demo skip-list covers `AdapterUnavailable`/`NativeFailure`, not the stalled-network timeout) |
 | E9 | Live doctor | `./target/debug/omnibusd doctor` | banner "Manjaro Linux rolling (7.1.13-2-MANJARO / GNOME)"; `[ok] floor: systemd 261: floor 252.0 met`; `[ok] floor: at-spi2 2.60.6-1: floor 2.50 met`; `[ok] journal: journald persistent storage: true`; "no pending human actions" |
 | E10 | Live daemon capabilities | `python3 ci/smoke/mcp_client.py ./target/debug/omnibusd list` + `call capabilities` | 17 read-only tools incl. `net_status`, `wiki_search`, `wiki_page`; document carries `distro {id: manjaro, family: manjaro, release: rolling}`, `floors: []` (all floors met), `journal.persistent present value=true`, `journal.prev_boot present value=true`, `net.read` via the nm adapter ("NetworkManager 1.58.1 … read-only"), `pkg.undo` via alpm (cache-downgrade); 17 capability entries |
@@ -100,15 +100,15 @@ tests are a subset of E6 re-run with filters for exact citation.
 
 ### Task 2.6.1 — Packaging: PPA, Debian repo, COPR
 
-- [x] **AC** Install via the native package manager on every T2 platform → daemon works, TTFM < 5 min (onboarding autotest on VM) — REQ-EXT (VM installs; `ci/matrix/t2.yml` pins every `package-install` leg `req-ext`). Local: the packaging inputs exist and validate — E7 (150 checks: debian control/rules/install/changelog, fedora spec, ppa signing posture, upload.sh `bash -n` + full-suffix validation + artifact-parent layout, offline/floor channel build contract, full matrix schema, workflow wiring).
+- [x] **AC** Install via the native package manager on every T2 platform → daemon works, TTFM < 5 min (onboarding autotest on VM) — REQ-EXT (VM installs; `ci/matrix/t2.yml` pins every `package-install` leg `req-ext`). Local: the packaging inputs exist and validate — E7 (150 checks at the record date; Update (2026-11-18): the validator now runs 156 checks per [the release checklist](../release-checklist.md) §1 G9: debian control/rules/install/changelog, fedora spec, ppa signing posture, upload.sh `bash -n` + full-suffix validation + artifact-parent layout, offline/floor channel build contract, full matrix schema, workflow wiring).
 - [x] **AC** Repository signing verified by a fresh machine (without trusting the key the install honestly warns) — REQ-EXT (needs the published channels and keys). Local: E7 pins the signing posture (`allow_unsigned_uploads = 0`, `dpkg-buildpackage -S` cut via `packaging/ppa/upload.sh`; CI never uploads).
 - [x] **AC** MVP → v1.0 upgrade with no manual steps — REQ-EXT (needs the published v1.0 artifacts; cross-family migration is not promised).
 
 ### Task 2.6.2 — T2 QA matrix and tier gates
 
-- [x] **AC** The 8-Linux-platform matrix green at its own tier (T1 full, T2 smoke, T3 build) — PASS (local halves): E7 validates all 8 legs (`arch`, `manjaro`, `debian-trixie`, `debian-bookworm`, `ubuntu-lts`, `mint`, `fedora`, `debian-bullseye`) against `specs/architecture/platform-matrix.md`; the T1 legs are green on this machine (E6/E8/E9/E10) with the same commands the CI gate runs (E1–E5). REQ-EXT: real runner executions of the T2 container legs, the mint VM leg, and the bullseye build leg (`.github/workflows/t2.yml`).
+- [x] **AC** The 8-Linux-platform matrix green at its own tier (T1 full, T2 smoke, T3 build) — PASS (local halves): E7 validates all 8 legs of the record-date matrix (`arch`, `manjaro`, `debian-trixie`, `debian-bookworm`, `ubuntu-lts`, `mint`, `fedora`, `debian-bullseye`) against `specs/architecture/platform-matrix.md` — Update (2026-11-18): the T2 matrix now has 9 legs (`ubuntu-26.04` added in `ci/matrix/t2.yml`) and E7 validates all 9; the T1 legs are green on this machine (E6/E8/E9/E10) with the same commands the CI gate runs (E1–E5). REQ-EXT: real runner executions of the T2 container legs, the mint VM leg, and the bullseye build leg (`.github/workflows/t2.yml`).
 - [x] **AC** The release report contains the tier↔capabilities divergence table when divergences exist — PASS (the rule is now normative): [the release checklist](../release-checklist.md) §4 item 2 defines the gate — for every leg that ran, `capabilities()` is compared against the tier promise, every divergence gets a row (`platform | tier | tier promise | capabilities() reality | explanation`), clean legs are listed as clean, and the known candidates are named (bookworm `desktop.*` hidden, apt `pkg.undo=none`, `prev_boot` behind the persistence opt-in, NM behind netplan). Filling the table is part of the v1.0 release report (REQ-EXT at release time).
-- [x] **AC** Demo №4 ("from scratch": empty VM → machine set up via the platform KB) passes on Arch and Ubuntu in CI — REQ-EXT (empty-VM provisioning). Honest note: `ci/smoke/` carries demo1–demo3 as the automated half (E8); the demo4 script itself is still to be written — recorded in the REQ-EXT register so it is picked up before the release.
+- [x] **AC** Demo №4 ("from scratch": empty VM → machine set up via the platform KB) passes on Arch and Ubuntu in CI — REQ-EXT (empty-VM provisioning). Honest note: `ci/smoke/` carries demo1–demo3 as the automated half (E8); the demo4 script itself is still to be written — recorded in the REQ-EXT register so it is picked up before the release. Update (2026-11-18): the script exists — `ci/smoke/demo4-from-scratch.sh` (commit e6358c0), wired into the `run-demos.sh` DEMOS list and referenced by release-checklist §6 — so the automated half is complete; only the empty-VM CI execution stays REQ-EXT (register item 6).
 
 ### Task 2.6.3 — The v1.0 release
 
@@ -123,7 +123,7 @@ tests are a subset of E6 re-run with filters for exact citation.
 3. Signed publication: PPA upload, Debian repo (trixie/bookworm), COPR — then the fresh-machine no-trust warning check per channel (2.6.1).
 4. Native-manager installs with TTFM < 5 min on every T2 platform; the MVP → v1.0 upgrade with no manual steps (2.6.1).
 5. Fedora-specific: a real dnf `history undo` package rollback on a disposable VM; demo3 on a Fedora CI leg; the fresh-portal smoke on the current Fedora release (2.3.1).
-6. Demo №4 ("from scratch") on Arch and Ubuntu in CI — the demo4 script itself is not yet written (`ci/smoke/` has demo1–3) (2.6.2).
+6. Demo №4 ("from scratch") on Arch and Ubuntu in CI — Update (2026-11-18): the script exists (`ci/smoke/demo4-from-scratch.sh`, wired into `ci/smoke/run-demos.sh`; `ci/smoke/` carries demo1–5); what remains REQ-EXT is the empty-VM execution on the reference CI legs (2.6.2).
 7. The v1.0 tag + the formal additive-only diff-log audit of `omnibus-core` vs the MVP tag + the GitHub Release carrying the report + announcements (Show HN follow-up, Phoronix/Hackaday) (2.6.3).
 8. The ~2000-package `pkg_list`/`pkg_info` timing on a real apt system (2.2.1).
 9. Manjaro true-VM legs: KDE/X11 combinations and the non-free mhwd driver smoke (`.github/workflows/manjaro.yml`, dispatch-gated) (2.4.1).
@@ -139,5 +139,5 @@ publication, the v1.0 tag, announcements) is an explicit REQ-EXT item with
 the procedure that closes it (`docs/release-checklist.md`). The gates are
 green this session: specs validator exit 0 (E1), fmt/clippy clean (E2/E3),
 R4 lints and fixtures green (E4/E5), the full workspace suite 462/0 (E6),
-packaging + matrix validation 150/150 (E7), demos green (E8), and the live
+packaging + matrix validation 150/150 (E7; Update (2026-11-18): the validator now runs 156 checks), demos green (E8), and the live
 Manjaro daemon serving the honest capabilities document (E9/E10).

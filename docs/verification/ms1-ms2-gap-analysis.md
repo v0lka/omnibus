@@ -149,6 +149,11 @@ CI-определения (`.github/workflows/`, `ci/matrix/`, `ci/smoke/`), у�
 (в) горстка решений, где реализация отклоняется от буквы AC роадмапа и нужно либо
 править документ, либо доделывать код (раздел 4).
 
+Update (2026-11-18): на текущем дереве 19 членов workspace и 13 адаптерных
+крейтов (`Cargo.toml`), декларативная матрица T2 — 9 платформ (leg
+`ubuntu-26.04`), скрипт демо №4 написан (`ci/smoke/demo4-from-scratch.sh`);
+категории (б) и (в) в объёме раздела 0 закрыты.
+
 ---
 
 ## 2. MS1 — MVP: Arch Linux T1, полный контракт (раздел 1 роадмапа)
@@ -570,7 +575,9 @@ KnowledgeBase, suite без изменений (`kb_suite_passes_against_the_off
 source/format), `packaging/fedora/omnibus.spec`, `packaging/ppa/` (dput.cf с
 allow_unsigned_uploads = 0, upload.sh через dpkg-buildpackage -S + dput,
 README с posture build-хостов); `ci/validate_packaging.py` — 150 статических
-проверок (включая подписную позу и оффлайн/флор-каналы), джобы package-build и
+проверок на дату аудита (Update (2026-11-18): сейчас 156 проверок —
+`docs/release-checklist.md` §1 G9; сведение 150→156 зафиксировано в разделе 0),
+включая подписную позу и оффлайн/флор-каналы, джобы package-build и
 t2.matrix исполняют его; `package-install` на всех легах жёстко `req-ext`
 (честный инвариант: контейнер не может честно заявить установку с рабочим
 десктопом).
@@ -581,9 +588,11 @@ bookworm, COPR); проверка «свежая машина без довер�
 (шаги №3, №4).
 
 **2.6.2 — QA-матрица T2 и гейты tier. Статус: частично.**
-Доказательство: `ci/matrix/t2.yml` — декларативные 8 платформ (arch, manjaro —
-T1; debian-trixie, debian-bookworm, ubuntu-lts, mint, fedora — T2 smoke+contract;
-debian-bullseye — T3 build-only) с честными правилами (stand-in для Mint,
+Доказательство: `ci/matrix/t2.yml` — декларативные 8 платформ на дату аудита,
+сейчас 9 (arch, manjaro — T1; debian-trixie, debian-bookworm, ubuntu-lts,
+ubuntu-26.04, mint, fedora — T2 smoke+contract; debian-bullseye — T3 build-only;
+Update (2026-11-18): добавлен leg `ubuntu-26.04` — решение Р-6 исполнено,
+раздел 0) с честными правилами (stand-in для Mint,
 bookworm desktop.* скрыты по флору at-spi2, REQ-EXT-инвариант package-install);
 `.github/workflows/t2.yml` раскручивает матрицу из файла (container-legs) и
 честно проваливает vm-legs («Not implemented — fail loudly instead of faking
@@ -591,10 +600,12 @@ the guarantee»); правило tier↔capabilities-таблицы сделан
 `docs/release-checklist.md` §4 п. 2 (формат строки расхождения, известные
 кандидаты: bookworm desktop.*, apt pkg.undo=none, prev_boot за opt-in, NM за
 netplan); демо №1–3 автоматизированы (`ci/smoke/`).
-Осталось: скрипт демо №4 («С нуля») НЕ НАПИСАН — признано в ms2-acceptance,
-это единственный отсутствующий кодовый артефакт Linux-части; реальные прогоны
-матрицы (расписание t2.yml и включённые VM-леги); заполнение divergence-таблицы
-(релизное время); demo4 на Arch и Ubuntu — внешний шаг №6.
+Осталось: реальные прогоны матрицы (расписание t2.yml и включённые VM-леги);
+заполнение divergence-таблицы (релизное время); demo4 на Arch и Ubuntu —
+внешний шаг №6. Update (2026-11-18): скрипт демо №4 («С нуля») написан —
+`ci/smoke/demo4-from-scratch.sh`, подключён в `ci/smoke/run-demos.sh` (DEMOS),
+так что «единственный отсутствующий кодовый артефакт Linux-части» устранён;
+REQ-EXT остаётся только исполнение на пустых VM.
 
 **2.6.3 — Релиз v1.0. Статус: не начата.**
 Доказательство отсутствия: `git tag` пуст (ни MVP-тега, ни v1.0), GitHub Release
@@ -790,12 +801,15 @@ platform-matrix, topology-and-lifecycle) либо организационные
    кодом не выполнен (решение Р-2).
 2. **1.2.3 AC2 «pkg.undo типизирован enum'ом значений, а не строкой»** — протокол
    пометил PASS со ссылкой на «JSON-значения»; enum-типа в коде нет, значения —
-   строки/отсутствие (решение Р-1).
+   строки/отсутствие (решение Р-1). Update (2026-11-18): исполнено — enum
+   `PkgUndoValue` добавлен в `omnibus-contracts/src/capabilities.rs` (раздел 0).
 3. **1.5.5 AC1 «round-trip clipboard … интеграционные тесты»** — протокол пометил
    PASS с оговоркой «clipboard round-trip сам по себе REQ-EXT»; фактически
    round-trip невозможен: clip_read/clip_write безусловно отвечают
    AdapterUnavailable (RemoteDesktop-гейтинг портала), фолбэка wl-clipboard нет.
-   Требуемое AC поведение не существует (решение Р-4).
+   Требуемое AC поведение не существует (решение Р-4). Update (2026-11-18):
+   исполнено — wl-clipboard/xclip-бэкенд clip_read/clip_write реализован в
+   `omnibus-adapter-xdg-portals` (раздел 0).
 4. **1.4.1 AC1 / 1.8.2 AC4 «4 комбинации GNOME/KDE × X11/Wayland в CI»** —
    протоколы говорят о «headless proxy» и «matrix defined», но матрица в ci.yml
    однократная по оси (только X11/Wayland); требуемая AC матрица не определена
@@ -822,7 +836,9 @@ platform-matrix, topology-and-lifecycle) либо организационные
    исполнение заявлено, CI-исполнение не подтверждено.
 10. **ms2-acceptance: «demo4 … REQ-EXT»** — корректное признание, но важно
     зафиксировать: это не только «внешний прогон», а отсутствующий скрипт —
-    кодовая работа (п. 18 раздела 5).
+    кодовая работа (п. 18 раздела 5). Update (2026-11-18): скрипт написан
+    (`ci/smoke/demo4-from-scratch.sh`, подключён в `ci/smoke/run-demos.sh`);
+    REQ-EXT остаётся только исполнение на Arch/Ubuntu.
 
 ---
 
@@ -831,8 +847,12 @@ platform-matrix, topology-and-lifecycle) либо организационные
 1. **Три кодовых/документных решения** (Р-1 pkg.undo-enum, Р-2 токены, Р-4
    clipboard-бэкенд) и одна правка AC (Р-3 ось DE) — либо кодом, либо поправкой
    роадмапа/спек; плюс два решения по мере готовности (Р-5 флор после sweep,
-   Р-6 состав матрицы).
-2. **Один отсутствующий кодовый артефакт** — скрипт демо №4.
+   Р-6 состав матрицы). Update (2026-11-18): Р-1/Р-2/Р-3/Р-4/Р-6 исполнены,
+   Р-5 — флор подтверждён без изменений (раздел 0); из пункта остаётся внешний
+   5-DE sweep.
+2. **Один отсутствующий кодовый артефакт** — скрипт демо №4. Update (2026-11-18):
+   устранён — скрипт написан и подключён (`ci/smoke/demo4-from-scratch.sh`,
+   `ci/smoke/run-demos.sh`).
 3. **Инфраструктура**: реальные прогоны CI, branch protection, VM-раннеры
    (Manjaro-матрица, T2 VM-леги, Mint).
 4. **VM-подтверждения** (блок B раздела 5): 6-дистрибутивная матрица, 5-DE sweep,

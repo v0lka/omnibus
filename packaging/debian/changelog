@@ -1,3 +1,12 @@
+omnibus (1.5.0) unstable; urgency=medium
+
+  * v1.5 feature set (MS2.5, roadmap phases Ф2.7-Ф2.9): app.list /
+    app.launch / app.open, ps.list / ps.info / sys.stats / power.status /
+    ps.signal, and the read-only flatpak+snap inventory aggregated into
+    the packages tools.
+
+ -- Omnibus maintainers <maintainers@omnibus.invalid>  Wed, 18 Nov 2026 00:00:00 +0000
+
 omnibus (0.1.0) unstable; urgency=medium
 
   * Initial in-repo packaging input for the T2 channels (roadmap task

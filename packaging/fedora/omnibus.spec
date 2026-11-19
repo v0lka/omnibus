@@ -39,7 +39,7 @@
 # until upstream designates a license.
 
 Name:           omnibus
-Version:        0.1.0
+Version:        1.5.0
 Release:        1%{?dist}
 Summary:        omnibusd - uniform, auditable, least-privilege MCP API over a desktop OS
 
@@ -111,6 +111,10 @@ install -m0644 packaging/scopes.d/*.toml %{buildroot}%{_sysconfdir}/omnibus/scop
 %config(noreplace) %{_sysconfdir}/omnibus/scopes.d/*.toml
 
 %changelog
+* Wed Nov 18 2026 Omnibus maintainers <maintainers@omnibus.invalid> - 1.5.0-1
+- v1.5 feature set (MS2.5, roadmap phases Ф2.7-Ф2.9): app launch,
+  process telemetry, read-only flatpak+snap inventory.
+
 * Wed Oct 14 2026 Omnibus maintainers <maintainers@omnibus.invalid> - 0.1.0-1
 - Initial RPM packaging input for the Fedora T2 channel (roadmap task
   2.6.1): one static binary, read-only scope templates, dnf undo intact.

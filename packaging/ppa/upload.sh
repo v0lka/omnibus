@@ -10,7 +10,7 @@
 #
 # The suffix is appended to the changelog version for this upload only
 # (~deb12 / ~deb13 / ~ubuntu24.04); the committed changelog stays at the
-# bare workspace version (0.1.0) - the suffix is channel metadata, never
+# bare workspace version (1.5.0) - the suffix is channel metadata, never
 # repo state.
 #
 # SECRETS POLICY (validated by ci/validate_packaging.py): signing happens

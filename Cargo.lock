@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-alpm"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "alpm",
  "async-trait",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-apt"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-atspi"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -668,7 +668,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-dnf"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-flatpak"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-fs-xdg"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-journald"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -711,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-kb-archwiki"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-kb-guides"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-launch"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-nm"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -756,7 +756,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-proc"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-systemd1"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-adapter-xdg-portals"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-contracts"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "omnibus-core"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -820,11 +820,11 @@ dependencies = [
 
 [[package]]
 name = "omnibus-lints"
-version = "0.1.0"
+version = "1.5.0"
 
 [[package]]
 name = "omnibus-probe"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "omnibus-contracts",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "omnibusd"
-version = "0.1.0"
+version = "1.5.0"
 dependencies = [
  "nix",
  "omnibus-adapter-alpm",

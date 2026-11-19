@@ -135,7 +135,11 @@ async fn metacharacters_arrive_verbatim(adapter: &LaunchAdapter) -> bool {
         .expect("fixture launch on a live stand");
     let expected = metachar_line();
     let unit_selector = format!("--unit={}", outcome.unit_name);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    // 30 s window: on a busy host (full `cargo test --workspace` rebuilding
+    // neighbors) a single journalctl probe can exceed a tight budget, and the
+    // unit's stdout lands in the journal asynchronously. The window guards the
+    // flake, not the invariant — the verbatim readback is still demanded.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     while tokio::time::Instant::now() < deadline {
         let journal = probe_command(
             "/usr/bin/journalctl",
@@ -147,7 +151,7 @@ async fn metacharacters_arrive_verbatim(adapter: &LaunchAdapter) -> bool {
                 "-n",
                 "50",
             ],
-            Duration::from_secs(3),
+            Duration::from_secs(5),
         )
         .await;
         if journal.is_some_and(|journal| journal.contains(&expected)) {
@@ -159,9 +163,19 @@ async fn metacharacters_arrive_verbatim(adapter: &LaunchAdapter) -> bool {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+    // Diagnostic context on a miss: did the unit even start, and how did it
+    // finish? Separates "journald was slow" from "the unit never ran".
+    let unit_state = probe_command(
+        "/usr/bin/systemctl",
+        &["--user", "show", &outcome.unit_name, "--property=ActiveState,Result,ExecMainStatus", "--no-pager"],
+        Duration::from_secs(5),
+    )
+    .await
+    .unwrap_or_else(|| String::from("unavailable"));
     eprintln!(
-        "the unit {} never logged `{expected}` — an argument was not delivered verbatim",
-        outcome.unit_name
+        "the unit {} never logged `{expected}` — an argument was not delivered verbatim (unit state: {})",
+        outcome.unit_name,
+        unit_state.replace('\n', "; ")
     );
     false
 }

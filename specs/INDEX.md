@@ -98,7 +98,7 @@ Every file under `specs/`:
 
 - [decisions/_template.md](decisions/_template.md) - ADR template
 - [decisions/001-dyn-trait-spi.md](decisions/001-dyn-trait-spi.md) - dyn Trait SPI
-- [decisions/002-apt-backend.md](decisions/002-apt-backend.md) - apt backend (Proposed, task 2.2.1)
+- [decisions/002-apt-backend.md](decisions/002-apt-backend.md) - apt backend (Accepted, closed by task 2.2.1)
 - [decisions/003-nm-own-crate.md](decisions/003-nm-own-crate.md) - NM in its own crate
 - [decisions/004-unifiedlog-backend.md](decisions/004-unifiedlog-backend.md) - unified log backend (Proposed, task 3.3.1)
 - [decisions/005-stdio-only-topology.md](decisions/005-stdio-only-topology.md) - stdio-only topology

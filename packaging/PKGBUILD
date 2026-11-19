@@ -33,7 +33,7 @@
 # field is intentionally omitted until upstream designates one.
 
 pkgname=omnibus
-pkgver=0.1.0
+pkgver=1.5.0
 pkgrel=1
 pkgdesc='omnibusd - uniform, auditable, least-privilege MCP API over a desktop OS'
 arch=('x86_64')

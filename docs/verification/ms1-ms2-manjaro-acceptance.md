@@ -24,9 +24,9 @@ NetworkManager active, journald persistent, 7 boots).
 | E5 | Dependency-rule negative check | forbidden edge `omnibus-core` injected into an adapter manifest in a /tmp copy | lint turns red with an `[R4-EDGES]` finding; real tree stays green |
 | E6 | Spec system validator | `python3 specs/tools/validate_specs.py` | exit 0 ("OK: structure green; 70 source headings mapped (zero unmapped); INDEX lists 50 files; 258 links resolve; English-only clean; 141 repo-path references verified (existing or marked planned)") |
 | E7 | Full workspace tests | `cargo test --workspace` | all targets `test result: ok`, 0 failed (see per-task counts below) |
-| E8 | Live Manjaro daemon smoke | `omnibusd doctor` + MCP stdio handshake (`ci/smoke/mcp_client.py`) | distro=manjaro, delayed_repos=true, mhwd=true, pamac=true; default session 17 read-only tools; granted session 27 tools incl. `net_status` |
+| E8 | Live Manjaro daemon smoke | `omnibusd doctor` + MCP stdio handshake (`ci/smoke/mcp_client.py`) | distro=manjaro, delayed_repos=true, mhwd=true, pamac=true; default session 17 read-only tools; granted session 27 tools incl. `net_status` — Update (2026-11-18): the current registry is 35 tools (v1.5 added app.list/app.launch/app.open and ps.list/ps.info/sys.stats/power.status/ps.signal; asserted in `omnibus-core/src/tools/mod.rs`) |
 | E9 | Pitch demos as autotests | `ci/smoke/run-demos.sh` | exit 0 — demo1/demo2/demo3 all legs PASS or honest SKIP |
-| E10 | Onboarding timing (automatable half) | fresh `omnibusd` instance → `capabilities()` | 0.05 s to a fully populated capabilities document with 27 tools |
+| E10 | Onboarding timing (automatable half) | fresh `omnibusd` instance → `capabilities()` | 0.05 s to a fully populated capabilities document with 27 tools — Update (2026-11-18): the current capabilities document lists 35 tools (32 domain + capabilities + session_info + doctor) |
 
 ## F1.1 — Assumption gate and skeleton
 
@@ -224,7 +224,7 @@ NetworkManager active, journald persistent, 7 boots).
 
 ### Task 2.4.1 — Manjaro branch: T1 contract + own test matrix
 
-- [x] **AC** The full T1 autotest set green on Manjaro (GNOME/KDE × X11/Wayland) — PASS (this machine, GNOME/Wayland): E7 full workspace green, E8 full T1 tool set live (27/27 incl. net_status), E9 demos green. The KDE/X11 legs are *defined* in `manjaro.yml`'s dispatch-gated `manjaro-vm-matrix` (skipped until self-hosted runners exist — the container legs run headless, with no desktop session); true-VM legs with non-free mhwd REQ-EXT via that same gated job.
+- [x] **AC** The full T1 autotest set green on Manjaro (GNOME/KDE × X11/Wayland) — PASS (this machine, GNOME/Wayland): E7 full workspace green, E8 full T1 tool set live (27/27 incl. net_status at the record date — Update (2026-11-18): the current registry is 35 tools), E9 demos green. The KDE/X11 legs are *defined* in `manjaro.yml`'s dispatch-gated `manjaro-vm-matrix` (skipped until self-hosted runners exist — the container legs run headless, with no desktop session); true-VM legs with non-free mhwd REQ-EXT via that same gated job.
 - [x] **AC** mhwd specifics (video drivers) do not break the desktop subsystem (smoke on a VM with a non-free driver) — PASS (local proxy): the desktop path is mhwd-agnostic (AT-SPI2 over D-Bus; the a11y suite walked the real compositor — 1851 nodes); the mhwd presence is a report fact only. The non-free-driver VM leg is REQ-EXT.
 - [x] **AC** Delayed repos detected by the probe and reflected in the report (not silently) — PASS: `ManjaroFacts{repos, delayed_repos, mhwd_present, pamac_present}` in the report; live probe prints `manjaro(delayed_repos=true, mhwd=true, pamac=true)` (E8 stderr banner); unit-tested parsing (pacman.conf sections, mirrorlist detection).
 
@@ -240,7 +240,7 @@ NetworkManager active, journald persistent, 7 boots).
 
 ### Task 2.6.2 — QA matrix and tier gates (Manjaro row)
 
-- [x] **AC** (Manjaro row) Full T1 set green on Manjaro with its own matrix — PASS: this machine (GNOME/Wayland): E1/E7/E8/E9 all green; `manjaro.yml` carries the Manjaro container + the dispatch-gated true-VM matrix (mhwd legs REQ-EXT). The remaining rows of the 8-platform matrix (apt/dnf families) are outside the approved goal (documented as future work; the tier≠capabilities divergence table belongs to the v1.0 release report per the roadmap, not the MS1 release).
+- [x] **AC** (Manjaro row) Full T1 set green on Manjaro with its own matrix — PASS: this machine (GNOME/Wayland): E1/E7/E8/E9 all green; `manjaro.yml` carries the Manjaro container + the dispatch-gated true-VM matrix (mhwd legs REQ-EXT). The remaining rows of the 8-platform matrix (apt/dnf families) were outside the approved goal at this record's date — Update (2026-11-18): shipped since then (commit e781e75 added the apt, dnf and kb-guides adapters with T2 packaging and the CI matrix, now 9 legs incl. `ubuntu-26.04` in `ci/matrix/t2.yml`); what stays REQ-EXT is the real runner/VM execution of those legs; the tier≠capabilities divergence table still belongs to the v1.0 release report per the roadmap.
 - [x] **AC** Release report contains the tier↔capabilities divergence table — PASS (scope-adjusted): the MS1 release notes draft contains the honest platform table (Arch T1 + Manjaro T1 only; other distros explicitly absent) and the capability deltas of the reference machine (portal.clipboard degraded behind RemoteDesktop gating; prev_boot fact-gated; writes grant-gated) — the honest-matrix requirement is met for the platforms this goal ships.
 
 ## Required external runs (REQ-EXT register)
