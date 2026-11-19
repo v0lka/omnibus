@@ -236,9 +236,26 @@ async fn run_bounded(
         })
         // A timed-out backend child must die with the call.
         .kill_on_drop(true);
-    let mut child = command
-        .spawn()
-        .map_err(|e| map_err(format!("clipboard backend {}", program.display()), e))?;
+    // A spawn can transiently fail with ETXTBSY ("Text file busy", raw OS
+    // error 26): the kernel denies exec while any writer still holds the
+    // file, and such a writer is always brief — a package upgrade replacing
+    // the backend binary mid-run, or (in tests) a fixture written just
+    // before the exec. A short bounded retry settles the race; anything
+    // else, or a denial that outlives the retries, is the honest contract
+    // error.
+    let what = format!("clipboard backend {}", program.display());
+    let retry_pause = Duration::from_millis(25);
+    let mut attempts_left = 3usize;
+    let mut child = loop {
+        match command.spawn() {
+            Ok(child) => break child,
+            Err(e) if e.raw_os_error() == Some(26) && attempts_left > 0 => {
+                attempts_left -= 1;
+                tokio::time::sleep(retry_pause).await;
+            }
+            Err(e) => return Err(map_err(what, e)),
+        }
+    };
 
     let stdin_handle = if stdin.is_some() {
         Some(
