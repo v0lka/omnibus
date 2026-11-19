@@ -472,8 +472,15 @@ mod tests {
             .expect("a pid");
         // SIGKILL is prompt; a bounded poll keeps the test deterministic. The
         // sleeper's leader (`sh`) is dead, so the reaped process cannot linger.
+        // Two /proc artifacts are NOT a surviving member and must not fail the
+        // run: a ZOMBIE entry (a container init that never waits() keeps the
+        // killed member visible forever — a systemd host reaps it in
+        // milliseconds, which is why this only ever failed in CI containers)
+        // and a REUSED pid (busy CI recycles ids while this test polls). Both
+        // prove the kill landed; only a live member still running the sleeper
+        // command is the honest failure.
         let mut waited = Duration::ZERO;
-        while std::path::Path::new(&format!("/proc/{sleeper}")).exists() {
+        while proc_entry_is_a_live_sleeper(sleeper) {
             assert!(
                 waited < Duration::from_secs(5),
                 "the group member {sleeper} outlived the process-group kill"
@@ -481,5 +488,38 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
             waited += Duration::from_millis(10);
         }
+    }
+
+    /// True only while `/proc/{pid}` holds a LIVE member of the sleeper's
+    /// process group: an entry whose state is not `Z` and whose cmdline still
+    /// names the sleeper command. A vanished entry, a zombie (state `Z` — the
+    /// kernel accepted the SIGKILL; reaping belongs to the parent init, not to
+    /// the doctor's group kill) and a reused pid (its cmdline no longer names
+    /// the sleeper) all read as dead — see the poll above. A genuinely
+    /// surviving sleeper keeps this true, so the honesty of the assertion is
+    /// unchanged.
+    fn proc_entry_is_a_live_sleeper(pid: u32) -> bool {
+        let stat_path = format!("/proc/{pid}/stat");
+        let Ok(stat) = std::fs::read_to_string(&stat_path) else {
+            // The entry vanished mid-poll: the member is gone.
+            return false;
+        };
+        // state = the field right after the parenthesized comm; comm may hold
+        // spaces and parens, so split after the LAST ')'.
+        let Some((_, after_comm)) = stat.rsplit_once(')') else {
+            return false;
+        };
+        if after_comm.trim_start().starts_with('Z') {
+            return false;
+        }
+        let Ok(cmdline) = std::fs::read_to_string(format!("/proc/{pid}/cmdline")) else {
+            // stat read the member as live, the cmdline read raced its exit:
+            // alive only if the entry still stands after both reads.
+            return std::path::Path::new(&stat_path).exists();
+        };
+        cmdline
+            .split('\0')
+            .next()
+            .is_some_and(|argv0| argv0.ends_with("sleep"))
     }
 }

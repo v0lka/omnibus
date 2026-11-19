@@ -624,7 +624,17 @@ fn read_log_tail(path: &Path, cap: u64) -> Result<Vec<u8>, ContractError> {
             format!("log: cannot {what} {}: {e}", path.display()),
         )
     };
-    let mut file = std::fs::File::open(path).map_err(|e| log_err("open", e))?;
+    // A MISSING log is not a failure: a machine that never ran a transaction
+    // (fresh install, disposable container) has no pacman.log yet, and the
+    // read answers an empty history — the same degradation the apt history
+    // log and the dnf history database apply (R3: a missing auxiliary
+    // artifact degrades to the empty read; a PRESENT log that cannot be read
+    // stays a `NativeFailure`).
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(log_err("open", e)),
+    };
     let len = file.metadata().map_err(|e| log_err("stat", e))?.len();
     let skip = len.saturating_sub(cap);
     let mut buf = Vec::new();
@@ -824,6 +834,22 @@ mod tests {
         let nothing = read_log_tail(&path, 10).expect("tiny tail read");
         assert!(nothing.is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_missing_log_reads_as_an_empty_history_not_a_failure() {
+        // A machine that never ran a pacman transaction (fresh install,
+        // disposable container) has no pacman.log yet: the read answers an
+        // empty history, never NativeFailure — the shared packages suite pins
+        // `history yields Ok` on every backend, and the apt history log and
+        // the dnf history database carry the same degradation (R3: a missing
+        // auxiliary artifact degrades to the empty read; a PRESENT log that
+        // cannot be read stays a failure).
+        let path =
+            std::env::temp_dir().join(format!("omnibus-alpm-absent-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path); // guarantee the absence
+        let bytes = read_log_tail(&path, 4096).expect("a missing log is an empty read");
+        assert!(bytes.is_empty(), "no log means no recorded transactions");
     }
 
     #[tokio::test]

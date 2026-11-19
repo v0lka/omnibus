@@ -115,9 +115,9 @@ jobs:
 
       - name: Spec system validation
         # Gated by the leg's declared scope (runs.specs in ci/matrix/t2.yml):
-        # a build-only T3 leg means exactly that — no spec validation (the
-        # bullseye distro Python 3.9 has no tomllib, and a build-only leg
-        # provisions no newer interpreter).
+        # a build-only T3 leg means exactly that — no spec validation (an old
+        # distro Python without tomllib is never upgraded for a build-only
+        # leg).
         if: matrix.runs['specs']
         run: make specs
 
@@ -129,6 +129,21 @@ jobs:
         # omnibus-adapter-alpm member itself (its libalpm link cannot build
         # here; the daemon is built without it either way).
         run: cargo build --workspace --no-default-features --exclude omnibus-adapter-alpm
+
+      - name: dnf history environment facts (the live suite's backend context)
+        # Best-effort diagnostics, never a gate: records what the packages
+        # contract suite sees on this backend — whether a history database
+        # exists at all (the no-database degradation answers an empty
+        # history) and what a bare `dnf history` prints. The suite itself is
+        # the gate; this step only makes its context legible in the log.
+        if: matrix.package-manager == 'dnf'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          ls -la /var/lib/dnf 2>/dev/null || echo "no /var/lib/dnf at all"
+          history_out="$(dnf history 2>&1 || true)"
+          printf '%s\n' "$history_out" | head -8
+          echo "(bare dnf history captured above; best-effort, non-blocking)"
 
       - name: Contract suite (cargo test --workspace)
         if: matrix.runs['contract-suite']
@@ -199,8 +214,12 @@ jobs:
           echo "$MATRIX_JSON" | python3 -c '
           import json, sys
           for leg in json.load(sys.stdin)["include"]:
+              leg_id = leg["id"]
+              runs = leg["runs"]
               kind = "documented STAND-IN (base-OS container)" if leg["standin"] else "reference container"
-              print(f"  {leg[\"id\"]:16} {kind} — build+suite: {bool(leg[\"runs\"].get(\"contract-suite\"))}, smoke: {bool(leg[\"runs\"].get(\"smoke\"))}")
+              suite = bool(runs.get("contract-suite"))
+              smoke = bool(runs.get("smoke"))
+              print(f"  {leg_id:16} {kind} — build+suite: {suite}, smoke: {smoke}")
           '
           echo "  package-install:  REQ-EXT on every leg (never a CI claim; release-runbook work, roadmap 2.6.1)"
           # The vm-legs verdict comes from the JOB OUTCOME, not from the

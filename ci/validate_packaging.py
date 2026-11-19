@@ -601,7 +601,10 @@ EXPECTED_LEGS: dict[str, tuple[str, str, str]] = {
     "ubuntu-26.04": ("t2", "smoke+contract", "container"),
     "mint": ("t2", "smoke+contract", "vm"),
     "fedora": ("t2", "smoke+contract", "container"),
-    "debian-bullseye": ("t3", "build", "container"),
+    # debian-bullseye (t3 build) was dropped on 2026-11-19: EOL since August
+    # 2026, packages moved to archive.debian.org — the reference container can
+    # no longer run an honest apt install. The T3 tier row in
+    # specs/architecture/platform-matrix.md is unchanged.
 }
 
 EXPECTED_CONTAINERS = {
@@ -610,7 +613,6 @@ EXPECTED_CONTAINERS = {
     "ubuntu-lts": "ubuntu:24.04",
     "ubuntu-26.04": "ubuntu:26.04",
     "fedora": "fedora:latest",
-    "debian-bullseye": "debian:bullseye",
 }
 
 
@@ -638,7 +640,7 @@ def validate_matrix() -> None:
     missing = sorted(set(EXPECTED_LEGS) - set(by_id))
     extra = sorted(set(by_id) - set(EXPECTED_LEGS))
     check(
-        "matrix: all nine Linux platforms present (roadmap 2.6.2 matrix incl. Ubuntu 26.04)",
+        "matrix: all eight Linux platforms present (roadmap 2.6.2 matrix incl. Ubuntu 26.04; bullseye dropped EOL 2026-08)",
         not missing and not extra,
         f"missing={missing} extra={extra}",
     )
@@ -731,8 +733,8 @@ def validate_matrix() -> None:
     if proc.returncode == 0:
         expanded = json.loads(proc.stdout)["include"]
         check(
-            "matrix: expansion carries all container-capable legs (6 reference + 1 stand-in)",
-            len(expanded) == 7,
+            "matrix: expansion carries all container-capable legs (5 reference + 1 stand-in)",
+            len(expanded) == 6,
             f"got {len(expanded)}",
         )
         mint = next((leg for leg in expanded if leg["id"] == "mint"), {})

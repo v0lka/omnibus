@@ -38,7 +38,8 @@ Trait `PackageManager` operations: `list`, `info`, `search`, `install`, `remove`
 | brew + mas | macOS (MS3, T2) | expected `none` (per the F3.1 gate) | honest schema degradation instead of a rollback promise |
 | flatpak/snap (v1.5) | Linux, wherever flatpak/snap are installed (snap ships by default only on Ubuntu among the targets) | n/a - read-only inventory | implements only `list`/`info`; no write operations exist for these sources |
 
-- `history` always reads the provider's own transaction log: the pacman log for alpm, `/var/log/apt/history.log` for apt.
+- `history` always reads the provider's own transaction log: the pacman log for alpm, `/var/log/apt/history.log` for apt, the dnf history database for dnf.
+- A machine with NO history recorded yet (fresh install, disposable container: the log file or the dnf history database is absent) answers `history` with an empty list, never a `NativeFailure` — a missing auxiliary artifact degrades to the empty read (the contract suite pins `history yields Ok` on every live backend). A PRESENT log or database that cannot be read stays a `NativeFailure`: `undo` must never mistake an unreadable history for "nothing ever happened".
 - An undo attempt where `pkg.undo=none` returns `CapabilityRequired` with a hint - never a failure in the middle of a transaction.
 - On alpm, a version missing from the cache yields `NativeFailure` (`undo-no-cache-version`); the payload names the ALA/AUR archive, and the actionable treatment — which article, which URL — lives in knowledge-base articles (P7).
 - apt transactions always run without interactive input (non-tty CLI flags are pinned by tests).
@@ -77,6 +78,7 @@ Trait `PackageManager` operations: `list`, `info`, `search`, `install`, `remove`
 - The install/remove schema always marks the missing rollback on machines with `pkg.undo=none`.
 - ALPM handles always stay inside the alpm adapter; only DTOs cross the SPI boundary.
 - Transaction history always comes from the provider's own log.
+- An absent history artifact (no log, no dnf history database) always reads as an empty history, never as an error; an unreadable present artifact always reads as `NativeFailure`.
 - (v1.5) The inventory provider always declares only read operations; the source of every package in
   `pkg_list` is always explicit in the DTO.
 

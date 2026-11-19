@@ -385,13 +385,22 @@ async fn drain_bounded<R: tokio::io::AsyncRead + Unpin>(mut pipe: R) -> Vec<u8> 
 
 /// Reads at most the last `cap` bytes of `path`; a leading partial line left
 /// by the tail seek is dropped (byte-identical semantics to the alpm reader).
+/// A MISSING log is not a failure: a machine that never ran a transaction
+/// (fresh install, disposable container) has no history log yet, and the read
+/// answers an empty history — the same degradation the dnf history database
+/// applies (R3: a missing auxiliary artifact degrades to the empty read; a
+/// PRESENT log that cannot be read stays a `NativeFailure`).
 fn read_log_tail(path: &Path, cap: u64) -> Result<Vec<u8>, ContractError> {
     use std::io::{Read, Seek, SeekFrom};
     let log_err = |what: &str, e: std::io::Error| ContractError::NativeFailure {
         code: NF_LOG_READ,
         payload: format!("log: cannot {what} {}: {e}", path.display()),
     };
-    let mut file = std::fs::File::open(path).map_err(|e| log_err("open", e))?;
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(log_err("open", e)),
+    };
     let len = file.metadata().map_err(|e| log_err("stat", e))?.len();
     let skip = len.saturating_sub(cap);
     let mut buf = Vec::new();
@@ -1394,6 +1403,34 @@ End-Date: 2024-06-01  08:00:09
         let bar = all.iter().find(|e| e.name == "bar").expect("upgrade entry");
         assert_eq!(bar.action, PackageAction::Upgrade);
         assert_eq!(bar.from_version.as_deref(), Some("2.0-1"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn history_without_a_log_answers_empty_not_a_failure() {
+        // A machine that never ran an apt transaction (fresh install,
+        // disposable container) has no /var/log/apt/history.log yet: the read
+        // answers an empty history, never NativeFailure — the shared packages
+        // suite pins `history yields Ok` on every backend, and the dnf
+        // history-database and pacman.log reads carry the same degradation
+        // (R3: a missing auxiliary artifact degrades to the empty read).
+        let dir = fixture_dir("no-history-log");
+        let mut programs = write_fixtures(&dir, FIXTURE_HISTORY);
+        programs.history_log = dir.join("no-such-history.log");
+        let adapter = AptAdapter::detect_with(programs, Duration::from_secs(9))
+            .await
+            .expect("fixture adapter must detect");
+        let history = adapter
+            .history(PackageHistoryQuery {
+                name: None,
+                limit: Some(10),
+            })
+            .await
+            .expect("an absent history log is an empty history, not an error");
+        assert!(
+            history.is_empty(),
+            "no log means no recorded transactions, got {history:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

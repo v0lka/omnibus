@@ -78,14 +78,22 @@ jobs:
       - name: Formatting
         run: cargo fmt --all -- --check
 
+      # Cross-family build contract (the same flags as the t2 container legs,
+      # see .github/workflows/t2.yml): --no-default-features drops the
+      # family-alpm wiring (the alpm adapter links the SYSTEM libalpm via
+      # pkg-config — absent on this ubuntu runner by design; the machine has
+      # no pacman), and --exclude keeps the workspace from compiling the
+      # omnibus-adapter-alpm member itself. The alpm adapter keeps its full
+      # coverage on the Arch-family legs: matrix-t1 (Arch containers),
+      # packaging (Arch), and manjaro.yml (Manjaro/Arch containers).
       - name: Clippy (workspace, all targets, warnings denied)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --no-default-features --exclude omnibus-adapter-alpm -- -D warnings
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --no-default-features --exclude omnibus-adapter-alpm
 
       - name: Test (contract suite, R4 fixtures, security and ladder seeds)
-        run: cargo test --workspace
+        run: cargo test --workspace --no-default-features --exclude omnibus-adapter-alpm
 
       - name: R4 boundary lints on the real tree
         run: cargo run -p omnibus-lints --bin omnibus-lints
@@ -233,7 +241,11 @@ jobs:
         run: cargo install cargo-llvm-cov --locked
 
       - name: Coverage summary with the 75% line floor
-        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 75
+        # The same cross-family flags as the gate job: the ubuntu runner has
+        # no system libalpm, so the alpm adapter member and the daemon's
+        # family-alpm wiring are out of this measurement (their coverage is
+        # asserted green by the Arch-family legs).
+        run: cargo llvm-cov --workspace --no-default-features --exclude omnibus-adapter-alpm --summary-only --fail-under-lines 75
 
   package-build:
     name: packaging (Arch container)
@@ -269,7 +281,13 @@ jobs:
           # 1.8.1 / 2.6.1).
           if [ -f packaging/PKGBUILD ]; then
             bash -n packaging/PKGBUILD
-            ( cd packaging && makepkg --printsrcinfo > /dev/null )
+            # Actions container jobs run as root, and makepkg refuses to run
+            # as root outright ("Running makepkg as root is not allowed").
+            # --printsrcinfo only parses the recipe, so a throwaway builder
+            # user owning the checkout is enough to run it honestly.
+            useradd -m builder
+            chown -R builder:builder "$GITHUB_WORKSPACE/packaging"
+            su builder -s /bin/bash -c "cd '$GITHUB_WORKSPACE/packaging' && makepkg --printsrcinfo > /dev/null"
             grep -Fq 'cd "$startdir/.."' packaging/PKGBUILD \
               || { echo "::error::build() must compile the workspace root: cd \"\$startdir/..\" (cargo's upward search from packaging/ otherwise hides where the artifacts land)"; exit 1; }
             grep -Fq '$startdir/../target/release/omnibusd' packaging/PKGBUILD \

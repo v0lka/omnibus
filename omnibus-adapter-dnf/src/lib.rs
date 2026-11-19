@@ -164,7 +164,15 @@ struct DnfState {
     /// The dnf binary detection resolved for this machine (`dnf` or `dnf5`
     /// path); every history/transaction/search/info call goes through it.
     backend: String,
+    /// The dnf history-database root this machine keeps its transaction
+    /// history under: dnf4 stores a `history/` directory, dnf5 a single
+    /// `history.sqlite`. Its absence means nothing was ever recorded.
+    history_db_root: std::path::PathBuf,
 }
+
+/// The production history-database root (tests inject a fixture root instead
+/// — see [`DnfAdapter::detect_with_history_root`]).
+const DNF_HISTORY_DB_ROOT: &str = "/var/lib/dnf";
 
 impl DnfAdapter {
     /// Detects the backend (composition-root entry): `dnf --version` (or
@@ -183,6 +191,23 @@ impl DnfAdapter {
         programs: DnfPrograms,
         budget: Duration,
     ) -> Result<Self, ContractError> {
+        Self::detect_with_history_root(
+            programs,
+            budget,
+            std::path::PathBuf::from(DNF_HISTORY_DB_ROOT),
+        )
+        .await
+    }
+
+    /// [`detect_with`](Self::detect_with) with the history-database root made
+    /// explicit. Production always reads the machine's real `/var/lib/dnf`;
+    /// fixtures bind an empty (or pre-seeded) root so the no-database
+    /// degradation is provable on any host.
+    async fn detect_with_history_root(
+        programs: DnfPrograms,
+        budget: Duration,
+        history_db_root: std::path::PathBuf,
+    ) -> Result<Self, ContractError> {
         let backend = match probe_program(&programs.dnf, budget).await {
             Ok(()) => programs.dnf.clone(),
             Err(ContractError::AdapterUnavailable) => {
@@ -196,8 +221,19 @@ impl DnfAdapter {
                 programs,
                 budget,
                 backend,
+                history_db_root,
             }),
         })
+    }
+
+    /// Whether any dnf history database exists under the configured root:
+    /// dnf4 keeps `history/`, dnf5 a single `history.sqlite`. Neither present
+    /// = this machine has never recorded a transaction (fresh installs,
+    /// disposable containers) — see the no-database degradation in
+    /// [`PackageManager::history`].
+    fn history_db_present(&self) -> bool {
+        self.inner.history_db_root.join("history").exists()
+            || self.inner.history_db_root.join("history.sqlite").exists()
     }
 
     /// Runs one bounded read subprocess.
@@ -857,7 +893,23 @@ impl PackageManager for DnfAdapter {
         query: PackageHistoryQuery,
     ) -> Result<Vec<PackageHistoryEntry>, ContractError> {
         let ids_args = [String::from("history")];
-        let captured = self.run(&self.inner.backend, &ids_args).await?;
+        let captured = match self.run(&self.inner.backend, &ids_args).await {
+            Ok(captured) => captured,
+            Err(err) => {
+                // The listing itself failed. On a machine with NO history
+                // database nothing was ever recorded (fresh installs,
+                // disposable containers): the honest answer is an empty
+                // history, not a failure — the log-based providers degrade the
+                // same way (R3: a missing auxiliary artifact degrades to the
+                // empty read). A PRESENT database that fails to answer stays a
+                // NativeFailure: that is a genuinely unreadable history, and
+                // `undo` must not mistake it for "nothing ever happened".
+                if !self.history_db_present() {
+                    return Ok(Vec::new());
+                }
+                return Err(err);
+            }
+        };
         let ids = history::parse_history_table(&captured.stdout);
         let window = ids.len().min(HISTORY_SCAN_LIMIT);
         let needed = usize::try_from(query.limit.unwrap_or(u32::MAX)).unwrap_or(usize::MAX);
@@ -1124,6 +1176,17 @@ fi
 
 echo "unknown fixture invocation: $cmd" >&2
 exit 97
+"#;
+
+    /// A dnf that identifies itself but cannot answer `history`: the
+    /// present-database / failing-listing half of the history degradation
+    /// pair (an absent database degrades to an empty history; a present one
+    /// that fails to answer stays a failure).
+    const FAILING_HISTORY_SCRIPT: &str = r#"#!/bin/sh
+cmd="$1"; shift
+if [ "$cmd" = "--version" ]; then echo "4.19.2 fixture"; exit 0; fi
+echo "error: reading history database failed" >&2
+exit 1
 "#;
 
     /// The rpm fixture: version probe, the canned installed table, and
@@ -1653,6 +1716,73 @@ exit 97
             .expect("filtered history");
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "gone");
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn history_without_a_database_answers_empty_not_a_failure() {
+        // A machine that never recorded a dnf transaction (fresh install,
+        // disposable container) has NO history database at all: even when the
+        // backend fails to answer the listing, the read answers an empty
+        // history, never NativeFailure — the shared packages suite pins
+        // `history yields Ok` on every backend, and the log-based providers
+        // (pacman.log, apt history.log) carry the same missing-log
+        // degradation (R3).
+        let dir = fixture_dir("no-history-db");
+        let failing_dnf = write_fixture(&dir, "dnf", FAILING_HISTORY_SCRIPT);
+        let mut programs = write_fixtures(&dir, false, false);
+        programs.dnf = failing_dnf;
+        let history_root = dir.join("no-dnf-state"); // never created
+        let adapter =
+            DnfAdapter::detect_with_history_root(programs, Duration::from_secs(9), history_root)
+                .await
+                .expect("fixture adapter must detect");
+        let history = adapter
+            .history(PackageHistoryQuery {
+                name: None,
+                limit: Some(10),
+            })
+            .await
+            .expect("an absent history database is an empty history, not an error");
+        assert!(
+            history.is_empty(),
+            "no database means no recorded transactions, got {history:?}"
+        );
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_failing_history_read_with_a_database_stays_a_native_failure() {
+        // With a database PRESENT, a failing `history` listing is a genuinely
+        // unreadable history and must stay an error: `undo` must never
+        // mistake an unreadable database for "nothing ever happened".
+        let dir = fixture_dir("history-db-fails");
+        let failing_dnf = write_fixture(&dir, "dnf", FAILING_HISTORY_SCRIPT);
+        let mut programs = write_fixtures(&dir, false, false);
+        programs.dnf = failing_dnf;
+        let history_root = dir.join("dnf-state");
+        std::fs::create_dir_all(history_root.join("history")).expect("seed the db root");
+        let adapter =
+            DnfAdapter::detect_with_history_root(programs, Duration::from_secs(9), history_root)
+                .await
+                .expect("fixture adapter must detect");
+        let result = adapter
+            .history(PackageHistoryQuery {
+                name: None,
+                limit: Some(10),
+            })
+            .await;
+        match result {
+            Err(ContractError::NativeFailure { code, .. }) => {
+                assert_eq!(
+                    code, NF_TRANSACTION,
+                    "the listing's nonzero exit keeps its declared mapping"
+                );
+            }
+            other => {
+                panic!("a present-but-failing history database must stay a failure, got {other:?}")
+            }
+        }
         cleanup(&dir);
     }
 
