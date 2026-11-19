@@ -167,7 +167,13 @@ async fn metacharacters_arrive_verbatim(adapter: &LaunchAdapter) -> bool {
     // finish? Separates "journald was slow" from "the unit never ran".
     let unit_state = probe_command(
         "/usr/bin/systemctl",
-        &["--user", "show", &outcome.unit_name, "--property=ActiveState,Result,ExecMainStatus", "--no-pager"],
+        &[
+            "--user",
+            "show",
+            &outcome.unit_name,
+            "--property=ActiveState,Result,ExecMainStatus",
+            "--no-pager",
+        ],
         Duration::from_secs(5),
     )
     .await
