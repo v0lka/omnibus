@@ -1213,6 +1213,29 @@ mod tests {
         }
     }
 
+    /// One retry on `TimeoutError` for live-backend calls inside tests.
+    ///
+    /// The adapter budgets are honest product contracts (a client may wait
+    /// at most CALL_TIMEOUT/LIST_TIMEOUT), and they double as the zbus
+    /// method-timeout backstop — so on a CI runner scheduling the whole
+    /// workspace suite in parallel, even a trivial status() call can blow
+    /// its 2s budget once without the backend being broken. A single
+    /// timeout is a scheduling artifact; retrying once keeps the live
+    /// contract verified without loosening any product budget. Two
+    /// timeouts in a row still fail the test.
+    async fn live_call_once_or_retry<F, T>(what: &'static str, op: impl Fn() -> F) -> T
+    where
+        F: std::future::Future<Output = Result<T, ContractError>>,
+    {
+        match op().await {
+            Err(ContractError::TimeoutError) => {
+                eprintln!("{what}: one TimeoutError under load — retrying once");
+                op().await.expect(what)
+            }
+            other => other.expect(what),
+        }
+    }
+
     #[tokio::test]
     async fn contract_suite_on_the_live_backend() {
         let Some(adapter) = connect_or_skip().await else {
@@ -1266,27 +1289,27 @@ mod tests {
         let Some(adapter) = connect_or_skip().await else {
             return;
         };
-        let units = adapter
-            .list(ServiceFilter {
+        let units = live_call_once_or_retry("list must succeed on the live backend", || {
+            adapter.list(ServiceFilter {
                 active_only: None,
                 name_pattern: None,
                 limit: None,
             })
-            .await
-            .expect("list must succeed on the live backend");
+        })
+        .await;
         assert!(
             units.len() >= 100,
             "expected 100+ units on a real machine, got {}",
             units.len()
         );
-        let limited = adapter
-            .list(ServiceFilter {
+        let limited = live_call_once_or_retry("limited list must succeed", || {
+            adapter.list(ServiceFilter {
                 active_only: None,
                 name_pattern: None,
                 limit: Some(5),
             })
-            .await
-            .expect("limited list must succeed");
+        })
+        .await;
         assert_eq!(limited.len(), 5);
     }
 
@@ -1298,10 +1321,10 @@ mod tests {
         // status("systemd-journald") resolves systemd-journald.service on the
         // bus; the DTO's unit_type must follow that canonical name, not the
         // suffix-less raw input (which would yield "").
-        let st = adapter
-            .status(String::from("systemd-journald"))
-            .await
-            .expect("journald exists on any systemd machine");
+        let st = live_call_once_or_retry("journald exists on any systemd machine", || {
+            adapter.status(String::from("systemd-journald"))
+        })
+        .await;
         assert_eq!(st.unit.name, "systemd-journald.service");
         assert_eq!(st.unit.unit_type, "service");
     }

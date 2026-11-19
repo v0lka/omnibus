@@ -65,11 +65,15 @@ with McpClient(["./target/debug/omnibusd"]) as client:
         elif result.is_error and (
             "no journal boot entry found" in result.text.lower()
             or "failed to look up boot" in result.text.lower()
+            or "no such boot id" in result.text.lower()
         ):
-            # journalctl answers "No journal boot entry found for the
-            # specified boot" on machines without a previous boot (fresh
-            # containers, server images) — the honest degradation this demo's
-            # header promises to skip, not a failure.
+            # journalctl answers honestly on machines without a previous boot
+            # (fresh containers, server images), with at least three message
+            # shapes observed across runners: "No journal boot entry found
+            # for the specified boot", "Failed to look up boot ...", and
+            # "Data from the specified boot (-1) is not available: No such
+            # boot ID in journal" — the honest degradation this demo's header
+            # promises to skip, not a failure.
             skip("journal_query(boot=previous)",
                  "honest degradation: this machine's journal has no previous boot entry")
         elif result.is_error:
