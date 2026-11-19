@@ -62,7 +62,7 @@ legs:
     kind: container
     container: debian:trixie
     package-manager: apt
-    pkgs: [make, git, gcc, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    pkgs: [make, git, gcc, libc6-dev, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
     runs:
       build: true
       contract-suite: true
@@ -80,7 +80,7 @@ legs:
     # `desktop.*` degrades hidden (a documented, honest row-level
     # degradation) — the leg still runs the suite; the honest-skip smoke
     # demos are expected to skip the desktop write legs, not fail.
-    pkgs: [make, git, gcc, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    pkgs: [make, git, gcc, libc6-dev, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
     runs:
       build: true
       contract-suite: true
@@ -94,7 +94,7 @@ legs:
     kind: container
     container: ubuntu:24.04
     package-manager: apt
-    pkgs: [make, git, gcc, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    pkgs: [make, git, gcc, libc6-dev, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
     runs:
       build: true
       contract-suite: true
@@ -111,7 +111,7 @@ legs:
     # this leg carries the full T2 smoke+contract scope on the current LTS.
     container: ubuntu:26.04
     package-manager: apt
-    pkgs: [make, git, gcc, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    pkgs: [make, git, gcc, libc6-dev, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
     runs:
       build: true
       contract-suite: true
@@ -129,7 +129,7 @@ legs:
     # facts). The real Mint leg is manual-dispatch only (T2_VM_ENABLED).
     standin-container: ubuntu:24.04
     standin-package-manager: apt
-    standin-pkgs: [make, git, gcc, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
+    standin-pkgs: [make, git, gcc, libc6-dev, pkg-config, at-spi2-core, dbus, python3, python3-yaml, curl, ca-certificates]
     package-manager: apt
     vm-note: Mint 22.x on the Ubuntu 24.04 base; X11-default desktop stack
     runs:

@@ -737,6 +737,27 @@ impl PackageManager for AptAdapter {
         let captured = self
             .run(&self.inner.programs.apt_cache, &policy_args)
             .await?;
+        // A policy answer must NAME the package (the leading "<name>:" block
+        // line). On real machines `apt-cache policy <unknown>` answers with
+        // only `N: ...` notices and a ZERO exit, so "the command succeeded"
+        // proves nothing about existence — without the named block the
+        // package does not exist, and info stays a contract error (the
+        // packages suite pins `unknown package is a contract error` on the
+        // live backend).
+        let stdout = String::from_utf8_lossy(&captured.stdout);
+        let names_the_package = stdout.lines().any(|line| {
+            let trimmed = line.trim();
+            trimmed == name
+                || trimmed
+                    .strip_prefix(name.as_str())
+                    .is_some_and(|rest| rest.starts_with(':'))
+        });
+        if !names_the_package {
+            return Err(ContractError::NativeFailure {
+                code: NF_PKG_NOT_FOUND,
+                payload: format!("pkg-not-found: apt-cache policy named no {name} block"),
+            });
+        }
         let policy = parse_policy(&captured.stdout);
         if policy.installed.is_none() && policy.candidate.is_none() {
             return Err(ContractError::NativeFailure {
@@ -1431,6 +1452,46 @@ End-Date: 2024-06-01  08:00:09
             history.is_empty(),
             "no log means no recorded transactions, got {history:?}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn info_of_an_unnamed_policy_block_is_pkg_not_found() {
+        // Real apt-cache answers an unknown package with only `N: ...`
+        // notices and a ZERO exit: "the command succeeded" must not read as
+        // "the package exists" — the packages suite pins `unknown package is
+        // a contract error` on the live backend.
+        let dir = fixture_dir("policy-unnamed");
+        let programs = AptPrograms {
+            apt_get: write_fixture(&dir, "apt-get", "#!/bin/sh\nexit 0\n"),
+            apt_cache: write_fixture(
+                &dir,
+                "apt-cache",
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"policy\" ]; then\n\
+                   echo \"N: Unable to locate package: $2\" >&2\n\
+                   echo \"N: No packages found\" >&2\n\
+                   exit 0\n\
+                 fi\n\
+                 exit 0\n",
+            ),
+            dpkg_query: write_fixture(&dir, "dpkg-query", "#!/bin/sh\nexit 0\n"),
+            history_log: dir.join("no-such-history.log"),
+        };
+        let adapter = AptAdapter::detect_with(programs, Duration::from_secs(9))
+            .await
+            .expect("fixture adapter must detect");
+        let result = adapter.info(String::from("omnibus-suite-missing")).await;
+        match result {
+            Err(ContractError::NativeFailure { code, payload }) => {
+                assert_eq!(code, NF_PKG_NOT_FOUND);
+                assert!(
+                    payload.contains("named no"),
+                    "payload names the cause: {payload}"
+                );
+            }
+            other => panic!("an unnamed policy block must be pkg-not-found, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
