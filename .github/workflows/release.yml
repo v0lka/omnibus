@@ -1,0 +1,247 @@
+# Omnibus CI — release builds and GitHub Releases (docs/release-checklist.md §5).
+#
+# Job map:
+#   build    — one release build per target-OS family (Linux x86_64), each
+#              inside that family's reference container (the same images as
+#              the QA workflows: archlinux:base-devel, debian:bookworm,
+#              ubuntu:24.04, fedora:latest — see ci/matrix/t2.yml). The arch
+#              leg is the full build (alpm links the system libalpm); the
+#              cross-family legs follow the t2.yml build contract
+#              (--no-default-features --exclude omnibus-adapter-alpm). Every
+#              leg packages omnibusd-<version>-<os>-x86_64.tar.xz with the
+#              binary at the tarball top level (the README install contract)
+#              and uploads it as a run artifact.
+#   publish  — downloads the family tarballs, writes SHA256SUMS and creates
+#              (or updates) the GitHub Release at the tag. The release body
+#              comes from docs/release-notes-<version>.md at the notes ref;
+#              without it an honest generated fallback body is used.
+#
+# Triggers:
+#   * push of a v* tag — the normal release path. The tag push is the
+#     human-issued, out-of-band action; this workflow only materializes the
+#     artifacts for it. The quality gates are NOT re-run here: they run on
+#     every push through ci.yml, and docs/release-checklist.md owns the
+#     release-time gates (G6–G10) and every REQ-EXT row (signing, channel
+#     uploads, announcements — always human).
+#   * workflow_dispatch with an existing `tag` input — the retro path for
+#     historical versions whose commits predate this workflow (a tag pushed
+#     on an old commit cannot trigger it: the workflow file is evaluated at
+#     the tagged commit). Dispatch with `notes_ref` when the notes live on a
+#     branch (typically main) instead of inside the old tag.
+#
+# Posture (mirrors the T2 track): this workflow creates the GitHub Release
+# with the built binaries — the in-repo half of checklist §5 — and needs
+# `contents: write` only for that. It has no credentials for and never runs
+# the distro-channel uploads (packaging/ppa/upload.sh, AUR, Debian repo,
+# COPR): those stay human-issued exactly as t2.yml states.
+#
+# macOS is an MS3 (v2.0) target and aarch64 is not a target of any spec or
+# CI matrix — both are deliberately absent from the artifact set (R7).
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release (e.g. v1.5.0); for historical versions whose commits predate this workflow"
+        required: true
+        type: string
+      notes_ref:
+        description: "Git ref to read docs/release-notes-<version>.md from (default: the tag itself)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: build (${{ matrix.os }} x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: arch
+            image: archlinux:base-devel
+            pm: pacman
+            family-features: full
+          - os: debian
+            image: debian:bookworm
+            pm: apt
+            family-features: cross-family
+          - os: ubuntu
+            image: ubuntu:24.04
+            pm: apt
+            family-features: cross-family
+          - os: fedora
+            image: fedora:latest
+            pm: dnf
+            family-features: cross-family
+    container:
+      image: ${{ matrix.image }}
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      FAMILY_FEATURES: ${{ matrix.family-features }}
+    steps:
+      - name: Check out the release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || format('refs/tags/{0}', github.event.inputs.tag) }}
+
+      - name: Install build dependencies (${{ matrix.pm }})
+        run: |
+          set -euo pipefail
+          case "${{ matrix.pm }}" in
+            pacman)
+              # The arch image builds the FULL workspace: base-devel carries
+              # gcc + pkgconf, and pacman carries the libalpm the alpm
+              # adapter links (same set as the ci.yml matrix-t1 job).
+              pacman -Syu --noconfirm --needed git rust
+              ;;
+            apt)
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git gcc libc6-dev pkg-config xz-utils curl ca-certificates
+              ;;
+            dnf)
+              dnf install -y gcc git xz curl ca-certificates
+              ;;
+            *)
+              echo "::error::unsupported package manager: ${{ matrix.pm }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Install Rust stable (non-Arch images)
+        # The same toolchain contract as the T2 legs (.github/workflows/
+        # t2.yml): the distro rustc on the Debian/Fedora images sits below
+        # the edition-2024 floor, so the pinned-current stable toolchain is
+        # the build contract. Arch ships current stable rust via pacman.
+        if: matrix.pm != 'pacman'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the release binary
+        # Cross-family build contract (ci/matrix/t2.yml header): the alpm
+        # adapter links the SYSTEM libalpm via pkg-config and cannot build
+        # off the Arch family; --exclude keeps the workspace from compiling
+        # that member at all. The probe + ladder hide the absent alpm row on
+        # the target machine anyway — the honest product shape.
+        run: |
+          set -euo pipefail
+          if [ "$FAMILY_FEATURES" = "full" ]; then
+            cargo build --release --workspace
+          else
+            cargo build --release --workspace --no-default-features --exclude omnibus-adapter-alpm
+          fi
+          ./target/release/omnibusd --version
+
+      - name: Package the family tarball
+        id: pack
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          FNAME="omnibusd-${VERSION}-${{ matrix.os }}-x86_64.tar.xz"
+          mkdir -v dist
+          install -m 0755 target/release/omnibusd dist/omnibusd
+          tar -cJf "$FNAME" -C dist omnibusd
+          tar -tJf "$FNAME"
+          ls -l "$FNAME"
+          echo "fname=$FNAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.os }}
+          path: ${{ steps.pack.outputs.fname }}
+          if-no-files-found: error
+          retention-days: 5
+
+  publish:
+    name: publish (GitHub Release)
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the notes ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || (github.event.inputs.notes_ref && github.event.inputs.notes_ref || format('refs/tags/{0}', github.event.inputs.tag)) }}
+
+      - name: Download the family tarballs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tarball-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum omnibusd-*.tar.xz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Resolve the release notes body
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          NOTES="docs/release-notes-${VERSION}.md"
+          if [ -f "$NOTES" ]; then
+            echo "release body: $NOTES at the notes ref"
+            cp "$NOTES" /tmp/release-body.md
+          else
+            echo "release body: $NOTES is absent at the notes ref — using the generated fallback"
+            {
+              printf '# omnibusd %s\n\n' "$VERSION"
+              printf 'Prebuilt omnibusd binaries for the four target-OS families (Linux x86_64):\n\n'
+              printf '| Artifact | Built on | Covers |\n'
+              printf '|---|---|---|\n'
+              printf '| omnibusd-%s-arch-x86_64.tar.xz | archlinux:base-devel (full build, alpm backend) | Arch, Manjaro |\n' "$VERSION"
+              printf '| omnibusd-%s-debian-x86_64.tar.xz | debian:bookworm (cross-family build) | Debian bookworm, trixie |\n' "$VERSION"
+              printf '| omnibusd-%s-ubuntu-x86_64.tar.xz | ubuntu:24.04 (cross-family build) | Ubuntu LTS, Mint 22.x |\n' "$VERSION"
+              printf '| omnibusd-%s-fedora-x86_64.tar.xz | fedora:latest (cross-family build) | Fedora |\n' "$VERSION"
+              printf '\nInstall:\n\n'
+              printf '    tar -xJf omnibusd-%s-<os>-x86_64.tar.xz\n' "$VERSION"
+              printf '    install -m 0755 omnibusd ~/.local/bin/\n\n'
+              printf 'SHA256SUMS covers every artifact. Platform tiers and guarantees:\n'
+              printf 'specs/architecture/platform-matrix.md; release procedure:\n'
+              printf 'docs/release-checklist.md. (Body generated by release.yml: no\n'
+              printf 'docs/release-notes-%s.md exists at the notes ref.)\n' "$VERSION"
+            } > /tmp/release-body.md
+          fi
+
+      - name: Create or update the GitHub Release
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG exists — updating assets in place"
+            gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* \
+              -R "$GITHUB_REPOSITORY" \
+              --title "omnibusd $VERSION" \
+              --notes-file /tmp/release-body.md \
+              --verify-tag
+          fi
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets,body --jq '{body_head: .body[0:80], assets: [.assets[].name]}'

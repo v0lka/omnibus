@@ -231,7 +231,12 @@ omnibusd --version
   (`--no-default-features --exclude omnibus-adapter-alpm`), and builder
   rustc must meet the 1.85 edition-2024 floor. Details in
   `packaging/README.md`.
-- The release procedure is owned by `docs/release-checklist.md`.
+- The release procedure is owned by `docs/release-checklist.md`. Its
+  in-repo half is automated: `.github/workflows/release.yml` builds the
+  per-family binary tarballs (`arch` full with alpm; `debian` / `ubuntu` /
+  `fedora` cross-family without it) plus `SHA256SUMS` and attaches them to
+  the GitHub Release at the pushed `v*` tag. The signed distro channels
+  below stay human-issued.
 
 ## CI
 
@@ -241,6 +246,12 @@ The same commands as the Makefile are the CI jobs:
 - `manjaro.yml` — the T1 VM track (own Manjaro matrix).
 - `t2.yml` — the T2 matrix legs (dispatch-gated, variable-gated where real
   desktops are required).
+- `release.yml` — the release builds and GitHub Releases: a `v*` tag push
+  builds the four family artifacts (`omnibusd-<version>-<os>-x86_64.tar.xz`
+  + `SHA256SUMS`) in the reference containers and publishes the release
+  whose body is `docs/release-notes-<version>.md`. Historical tags that
+  predate the workflow are released by dispatch:
+  `gh workflow run release.yml -f tag=<tag> -f notes_ref=main`.
 
 CI never claims a leg it cannot run: REQ-EXT steps (real-desktop round-trips,
 VM matrices, channel publication) are documented, never faked.

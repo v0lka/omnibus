@@ -92,15 +92,30 @@ Download the build for your platform from the
 your `PATH`:
 
 ```bash
-tar -xJf omnibusd-*.tar.xz
+tar -xJf omnibusd-<version>-<os>-x86_64.tar.xz
 install -m 0755 omnibusd ~/.local/bin/     # or /usr/local/bin
 omnibusd --version
 ```
 
-> Release artifacts are not published yet. Until the first release lands, build
-> from source — see [CONTRIBUTING.md](CONTRIBUTING.md). Distribution packages
-> (AUR, Debian repo, Fedora COPR, Ubuntu PPA) are planned; the packaging recipes
-> already live in [`packaging/`](packaging/).
+Each release ships four family artifacts (Linux x86_64) plus a `SHA256SUMS`
+covering them:
+
+| Artifact | Built on | Covers |
+|---|---|---|
+| `omnibusd-<version>-arch-x86_64.tar.xz` | archlinux:base-devel (full build) | Arch, Manjaro |
+| `omnibusd-<version>-debian-x86_64.tar.xz` | debian:bookworm (cross-family build) | Debian 12, 13 |
+| `omnibusd-<version>-ubuntu-x86_64.tar.xz` | ubuntu:24.04 (cross-family build) | Ubuntu LTS, Mint 22.x |
+| `omnibusd-<version>-fedora-x86_64.tar.xz` | fedora:latest (cross-family build) | Fedora |
+
+The cross-family builds exclude the alpm adapter by design (it links the
+system libalpm and cannot build off the Arch family); there the family
+backend (apt/dnf) is the packages subsystem, and the probe hides the absent
+alpm row — `capabilities` reports exactly that per machine. macOS ships with
+MS3 (v2.0) and aarch64 is not a target of any spec or CI matrix: neither has
+artifacts. Distribution packages (AUR, Debian repo, Fedora COPR, Ubuntu PPA)
+are planned; the packaging recipes already live in [`packaging/`](packaging/).
+Until a release lands for your shape, build from source — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 Optional backends are picked up automatically when present — UPower for
 `power.status`, `systemd-run` for `app.launch`, `xdg-open` for `app.open`, the

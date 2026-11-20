@@ -142,7 +142,24 @@ The v1.0 release notes must contain, in this order:
       only additive extensions — `net_status` registered over the Ф2.2.3
       trait and new capability constants). The MS2 session proxy for this
       audit is recorded in `docs/verification/ms2-acceptance.md`.
-- [ ] GitHub Release carrying the §4 report.
+- [ ] Commit the release notes as `docs/release-notes-<version>.md`, then
+      push the tag: `.github/workflows/release.yml` picks the tag push up
+      and performs the in-repo half of the release — the four family
+      builds (arch full / debian / ubuntu / fedora cross-family, Linux
+      x86_64), `omnibusd-<version>-<os>-x86_64.tar.xz` + `SHA256SUMS`, and
+      the GitHub Release whose body is exactly the notes file. The quality
+      gates are NOT re-run there: they ran on every push through `ci.yml`,
+      and G6–G10 of §1 stay release-owner duties. A tag on an old commit
+      (one that predates the workflow) cannot trigger it — release such a
+      version by workflow dispatch:
+      `gh workflow run release.yml -f tag=<tag> -f notes_ref=main`
+      (`notes_ref` is where the workflow reads
+      `docs/release-notes-<version>.md` from; it defaults to the tag).
+- [ ] GitHub Release carrying the §4 report — the release body is the
+      notes file (see the workflow row above); if
+      `docs/release-notes-<version>.md` is absent at the notes ref, the
+      workflow publishes an honest generated fallback and the release
+      owner replaces the body with the full §4 report afterwards.
 - [ ] Positioning updates (Ubuntu/Mint/Fedora/Debian segments from the
       pitch), Show HN follow-up, Phoronix/Hackaday article.
 
@@ -176,8 +193,8 @@ form.
       The matrix definitions (`ci/matrix/t2.yml`) gain no new legs for
       v1.5 — the new demo rides the existing smoke legs (`ci/matrix/README.md`
       documents the split).
-- [ ] Release notes carry the v1.5 content (roadmap 2.9.2 AC2; the draft
-      lives in [release-notes-1.5.0-draft.md](release-notes-1.5.0-draft.md)):
+- [ ] Release notes carry the v1.5 content (roadmap 2.9.2 AC2; the release
+      notes live in [release-notes-1.5.0.md](release-notes-1.5.0.md)):
       the six new capabilities (`app.read`, `app.launch`, `ps.read`,
       `ps.signal`, `sys.read`, `power.read`) and the honest boundaries —
       flatpak/snap inventory is read-only, `power.status` appears only
