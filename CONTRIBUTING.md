@@ -21,7 +21,7 @@ Normative documents, in order of authority:
 1. `docs/development/omnibus-spec.md` — product layer
 2. `docs/development/omnibus-architecture.md` — SPI architecture
 3. `docs/development/omnibus-roadmap.md` — work plan: milestones MS1–MS3,
-   atomic tasks in What/How/AC format
+   atomic tasks in What/Where/How/AC format
 4. `specs/` — formal English specs derived from (1)–(3); specs never introduce
    new product or architecture decisions
 
@@ -169,7 +169,7 @@ rejected in review, by design:
 
 - The work plan is `docs/development/omnibus-roadmap.md`: milestones MS1
   (MVP, Arch) → MS2 (v1.0, all target distros) → MS2.5 (v1.5) → MS3 (v2.0:
-  macOS, AppIntents). Tasks are atomic with What/How/AC; the AC checkboxes are
+  macOS, AppIntents). Tasks are atomic with What/Where/How/AC; the AC checkboxes are
   the acceptance bar. Unticked ACs mean live-environment legs are still
   pending — the evidence base (what is repo-verified vs. what needs real
   desktops, VM matrices, CI runs, publication) is in `docs/verification/`.
